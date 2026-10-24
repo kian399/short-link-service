@@ -3,7 +3,7 @@
 > 一个能扛压测、能被缓存救活的 URL 短链服务。
 > **FastAPI · PostgreSQL · Redis · SQLAlchemy 2 · Alembic · Docker · pytest**
 
-<!-- 部署后替换：![demo](https://img.shields.io/badge/demo-online-brightgreen) -->
+![ci](https://github.com/kian399/short-link-service/actions/workflows/ci.yml/badge.svg)
 
 ## 功能
 

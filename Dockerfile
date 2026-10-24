@@ -10,16 +10,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 先只装依赖，利用镜像层缓存
+# 只装第三方依赖，不安装项目自身：
+# 本项目以 `uvicorn app.main:app` 方式运行，不需要被构建成轮子。
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# 再复制源码并安装项目本身
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
-
-RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 

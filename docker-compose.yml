@@ -30,6 +30,10 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # 容器内必须用服务名访问；.env 里的 localhost 只适用于本机开发
+      DATABASE_URL: postgresql+psycopg2://shortlink:shortlink_dev@postgres:5432/shortlink
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy

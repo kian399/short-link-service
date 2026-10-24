@@ -1,4 +1,6 @@
-from app.services.shortener import base62_encode, make_code, BASE62_ALPHABET
+import pytest
+
+from app.services.shortener import BASE62_ALPHABET, base62_encode, generate_code
 
 
 def test_base62_encode_zero():
@@ -9,17 +11,29 @@ def test_base62_encode_62():
     assert base62_encode(62) == "10"
 
 
-def test_make_code_length():
-    code = make_code(1)
-    assert 4 <= len(code) <= 8
+def test_base62_encode_negative_rejected():
+    with pytest.raises(ValueError):
+        base62_encode(-1)
 
 
-def test_make_code_charset():
-    code = make_code(12345)
-    for c in code:
-        assert c in BASE62_ALPHABET
+def test_generate_code_default_length():
+    assert len(generate_code()) == 7
 
 
-def test_make_code_unique():
-    codes = [make_code(i) for i in range(1, 1000)]
-    assert len(set(codes)) == 999
+def test_generate_code_custom_length():
+    assert len(generate_code(12)) == 12
+
+
+def test_generate_code_charset():
+    for char in generate_code(64):
+        assert char in BASE62_ALPHABET
+
+
+def test_generate_code_uniqueness():
+    codes = {generate_code() for _ in range(1000)}
+    assert len(codes) == 1000
+
+
+def test_generate_code_rejects_bad_length():
+    with pytest.raises(ValueError):
+        generate_code(0)

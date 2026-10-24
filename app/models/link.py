@@ -8,12 +8,12 @@ class Link(Base):
     __tablename__ = "links"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    code = Column(String(10), unique=True, index=True, nullable=False)
+    code = Column(String(16), unique=True, index=True, nullable=False)
     original_url = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
 
-    clicks = relationship("ClickStat", back_populates="link")
+    clicks = relationship("ClickStat", back_populates="link", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class ClickStat(Base):

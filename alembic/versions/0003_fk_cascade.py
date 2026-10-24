@@ -4,6 +4,7 @@ Revision ID: 0003_fk_cascade
 Revises: 0002_code_len
 Create Date: 2026-10-24
 """
+
 from alembic import op
 
 revision = "0003_fk_cascade"
@@ -16,8 +17,10 @@ def upgrade() -> None:
     op.drop_constraint("click_stats_link_id_fkey", "click_stats", type_="foreignkey")
     op.create_foreign_key(
         "click_stats_link_id_fkey",
-        "click_stats", "links",
-        ["link_id"], ["id"],
+        "click_stats",
+        "links",
+        ["link_id"],
+        ["id"],
         ondelete="CASCADE",
     )
 
@@ -26,6 +29,8 @@ def downgrade() -> None:
     op.drop_constraint("click_stats_link_id_fkey", "click_stats", type_="foreignkey")
     op.create_foreign_key(
         "click_stats_link_id_fkey",
-        "click_stats", "links",
-        ["link_id"], ["id"],
+        "click_stats",
+        "links",
+        ["link_id"],
+        ["id"],
     )

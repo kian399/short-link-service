@@ -1,6 +1,8 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
+
 from app.db import Base
 
 
@@ -13,7 +15,9 @@ class Link(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
 
-    clicks = relationship("ClickStat", back_populates="link", cascade="all, delete-orphan", passive_deletes=True)
+    clicks = relationship(
+        "ClickStat", back_populates="link", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class ClickStat(Base):

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
@@ -21,8 +21,8 @@ def _is_expired(expires_at: datetime | None) -> bool:
     if not expires_at:
         return False
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at <= datetime.now(timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= datetime.now(UTC)
 
 
 @router.get("/{code}")
@@ -49,11 +49,13 @@ def redirect_to_original(
 
     set_cached_link(code, link.original_url, link.expires_at)
 
-    db.add(ClickStat(
-        link_id=link.id,
-        ip=request.client.host if request.client else None,
-        user_agent=(request.headers.get("user-agent") or "")[:255],
-    ))
+    db.add(
+        ClickStat(
+            link_id=link.id,
+            ip=request.client.host if request.client else None,
+            user_agent=(request.headers.get("user-agent") or "")[:255],
+        )
+    )
     db.commit()
 
     return RedirectResponse(url=link.original_url, status_code=302)

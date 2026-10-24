@@ -45,7 +45,7 @@ def create_link(
             return _insert(db, link_data.custom_alias, link_data)
         except IntegrityError:
             db.rollback()
-            raise AliasConflict()
+            raise AliasConflict() from None
 
     for _ in range(MAX_CODE_ATTEMPTS):
         try:

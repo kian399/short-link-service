@@ -1,11 +1,20 @@
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, HttpUrl, computed_field, field_validator
+
+from app.config import settings
 
 ALIAS_PATTERN = re.compile(r"^[0-9A-Za-z_-]{4,16}$")
 RESERVED_ALIASES = {
-    "healthz", "docs", "redoc", "openapi.json", "metrics", "admin", "api", "static",
+    "healthz",
+    "docs",
+    "redoc",
+    "openapi.json",
+    "metrics",
+    "admin",
+    "api",
+    "static",
 }
 
 
@@ -27,13 +36,17 @@ class LinkCreate(BaseModel):
 
 
 class LinkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     code: str
     original_url: str
     created_at: datetime
     expires_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def short_url(self) -> str:
+        return f"{settings.BASE_URL.rstrip('/')}/{self.code}"
 
 
 class LinkStatsResponse(BaseModel):

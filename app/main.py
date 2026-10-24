@@ -1,11 +1,18 @@
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.v1.links import router as links_router
 from app.api.v1.redirect import router as redirect_router
 from app.exceptions import AliasConflict, LinkExpired, LinkNotFound, Unauthorized
+from app.logging_config import configure_logging
+from app.middleware.request_id import RequestIDMiddleware
+
+configure_logging()
+logger = structlog.get_logger(__name__)
 
 app = FastAPI(title="短链接服务")
+app.add_middleware(RequestIDMiddleware)
 
 
 @app.exception_handler(LinkNotFound)
@@ -26,6 +33,16 @@ async def alias_conflict_handler(request: Request, exc: AliasConflict):
 @app.exception_handler(Unauthorized)
 async def unauthorized_handler(request: Request, exc: Unauthorized):
     return JSONResponse(status_code=401, content={"detail": "API Key 无效"})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = structlog.contextvars.get_contextvars().get("request_id", "")
+    logger.exception("unhandled_exception")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误", "request_id": request_id},
+    )
 
 
 # 注意：/healthz 必须注册在 /{code} 之前，否则会被跳转路由吃掉。

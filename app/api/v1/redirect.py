@@ -13,6 +13,7 @@ from app.services.cache import (
     set_cached_link,
     set_missing,
 )
+from app.services.singleflight import single_flight
 
 router = APIRouter(tags=["redirect"])
 
@@ -25,30 +26,17 @@ def _is_expired(expires_at: datetime | None) -> bool:
     return expires_at <= datetime.now(UTC)
 
 
-@router.get("/{code}")
-def redirect_to_original(
-    code: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    cached = get_cached_link(code)
-    if cached:
-        if cached.get("miss"):
-            raise LinkNotFound()
-        if _is_expired(cached.get("expires_at")):
-            delete_cached_link(code)
-            raise LinkExpired()
-        return RedirectResponse(url=cached["url"], status_code=302)
-
+def _load_from_db(code: str, db: Session, request: Request) -> dict:
+    """缓存未命中时的回源逻辑；被 singleflight 包住，同一 code 只有一个线程进来。"""
     link = db.query(Link).filter(Link.code == code).first()
-    if not link:
+    if link is None:
         set_missing(code)
-        raise LinkNotFound()
+        return {"miss": True}
     if _is_expired(link.expires_at):
-        raise LinkExpired()
+        # 不缓存过期链接，直接每次回源（过期是少数路径）
+        return {"url": link.original_url, "expires_at": link.expires_at}
 
     set_cached_link(code, link.original_url, link.expires_at)
-
     db.add(
         ClickStat(
             link_id=link.id,
@@ -57,5 +45,24 @@ def redirect_to_original(
         )
     )
     db.commit()
+    return {"url": link.original_url, "expires_at": link.expires_at}
 
-    return RedirectResponse(url=link.original_url, status_code=302)
+
+@router.get("/{code}")
+def redirect_to_original(
+    code: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    cached = get_cached_link(code)
+    if cached is None:
+        # 击穿保护：同一短码的并发请求只放一个去查库
+        cached = single_flight.do(f"link:{code}", lambda: _load_from_db(code, db, request))
+
+    if cached.get("miss"):
+        raise LinkNotFound()
+    if _is_expired(cached.get("expires_at")):
+        delete_cached_link(code)
+        raise LinkExpired()
+
+    return RedirectResponse(url=cached["url"], status_code=302)

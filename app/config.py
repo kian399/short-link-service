@@ -16,5 +16,11 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 3600
     LOG_LEVEL: str = "INFO"
 
+    # 性能相关：压测时可通过环境变量关掉某一层，做四组对比
+    CACHE_L1_ENABLED: bool = True
+    CACHE_L2_ENABLED: bool = True
+    L1_CACHE_SIZE: int = 10000
+    L1_CACHE_TTL: float = 30.0
+
 
 settings = Settings()

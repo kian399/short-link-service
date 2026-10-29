@@ -56,3 +56,15 @@ def client(db_session, fake_redis):
 @pytest.fixture()
 def auth_headers():
     return {"X-API-Key": settings.API_KEY}
+
+
+@pytest.fixture(autouse=True)
+def _reset_l1_and_metrics():
+    """每个用例前后清空 L1 缓存与指标，避免相互污染。"""
+    from app import metrics
+    from app.services.cache import l1_cache
+
+    l1_cache.clear()
+    metrics.reset()
+    yield
+    l1_cache.clear()

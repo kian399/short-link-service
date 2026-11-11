@@ -1,3 +1,7 @@
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
+
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -5,15 +9,56 @@ from fastapi.responses import JSONResponse
 from app import metrics
 from app.api.v1.links import router as links_router
 from app.api.v1.redirect import router as redirect_router
+from app.config import settings
+from app.db import SessionLocal
 from app.exceptions import AliasConflict, LinkExpired, LinkNotFound, Unauthorized
 from app.logging_config import configure_logging
 from app.middleware.metrics import MetricsMiddleware
 from app.middleware.request_id import RequestIDMiddleware
+from app.services import stats
 
 configure_logging()
 logger = structlog.get_logger(__name__)
 
-app = FastAPI(title="短链接服务")
+
+def _flush_stats_blocking() -> None:
+    """在一个独立 Session 里把 Redis 计数刷进库；不占用请求的连接。"""
+    db = SessionLocal()
+    try:
+        stats.flush_once(db)
+    finally:
+        db.close()
+
+
+async def _stats_flush_loop(interval: int) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            # 同步 IO 丢到线程池，避免阻塞事件循环
+            await asyncio.to_thread(_flush_stats_blocking)
+        except Exception:  # noqa: BLE001 后台任务不能因为一次失败就退出
+            logger.exception("stats_flush_failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = None
+    if settings.STATS_FLUSH_ENABLED:
+        task = asyncio.create_task(_stats_flush_loop(settings.STATS_FLUSH_INTERVAL))
+        logger.info("stats_flush_started", interval=settings.STATS_FLUSH_INTERVAL)
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            # 关闭前再刷一次，避免最后几十秒的点击丢掉
+            with contextlib.suppress(Exception):
+                _flush_stats_blocking()
+
+
+app = FastAPI(title="短链接服务", lifespan=lifespan)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(MetricsMiddleware)
 

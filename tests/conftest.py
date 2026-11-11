@@ -43,7 +43,10 @@ def fake_redis():
 
 
 @pytest.fixture()
-def client(db_session, fake_redis):
+def client(db_session, fake_redis, monkeypatch):
+    # 测试里不起后台 flush 协程：异步任务会在断言之间偷偷落库，让结果不可复现
+    monkeypatch.setattr(settings, "STATS_FLUSH_ENABLED", False)
+
     def _get_db():
         yield db_session
 

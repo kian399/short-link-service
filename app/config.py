@@ -22,5 +22,9 @@ class Settings(BaseSettings):
     L1_CACHE_SIZE: int = 10000
     L1_CACHE_TTL: float = 30.0
 
+    # 点击统计：跳转只写 Redis 计数器，后台按这个间隔批量落库
+    STATS_FLUSH_ENABLED: bool = True
+    STATS_FLUSH_INTERVAL: int = 60
+
 
 settings = Settings()

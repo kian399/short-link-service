@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -30,3 +30,17 @@ class ClickStat(Base):
     user_agent = Column(String(255))
 
     link = relationship("Link", back_populates="clicks")
+
+
+class LinkStatsDaily(Base):
+    """按天聚合的点击统计。
+
+    跳转路径不再逐次写明细表，而是写 Redis 计数器，后台任务批量落到这里。
+    主键 (link_id, stat_date) 让 UPSERT 天然幂等。
+    """
+
+    __tablename__ = "link_stats_daily"
+
+    link_id = Column(Integer, ForeignKey("links.id", ondelete="CASCADE"), primary_key=True)
+    stat_date = Column(Date, primary_key=True)
+    clicks = Column(BigInteger, nullable=False, default=0, server_default="0")

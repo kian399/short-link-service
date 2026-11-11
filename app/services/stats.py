@@ -80,11 +80,10 @@ def ack_counts(rows: list[CounterRow]) -> None:
         logger.warning("ack_counts_failed", exc_info=True)
         return
 
-    stale = [
-        row[0]
-        for row, left in zip(rows, remainders)
-        if isinstance(left, int) and left <= 0
-    ]
+    stale: list[str] = []
+    for row, left in zip(rows, remainders, strict=False):
+        if isinstance(left, int) and left <= 0:
+            stale.append(row[0])
     if stale:
         try:
             redis_module.redis_client.delete(*stale)
@@ -92,14 +91,12 @@ def ack_counts(rows: list[CounterRow]) -> None:
             logger.warning("ack_delete_failed", keys=stale)
 
 
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO link_stats_daily (link_id, stat_date, clicks)
     SELECT l.id, :stat_date, :clicks FROM links l WHERE l.code = :code
     ON CONFLICT (link_id, stat_date)
     DO UPDATE SET clicks = link_stats_daily.clicks + EXCLUDED.clicks
-    """
-)
+    """)
 
 
 def flush_once(db: Session) -> int:

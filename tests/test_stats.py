@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.models.link import LinkStatsDaily
+from app.models.link import Link, LinkStatsDaily
 from app.services import stats
 
 
@@ -70,7 +70,8 @@ def test_flush_once_upserts_daily_row(client, auth_headers, fake_redis, db_sessi
 
     assert stats.flush_once(db_session) == 1
 
-    row = db_session.query(LinkStatsDaily).one()
+    link_id = db_session.query(Link).filter_by(code=code).one().id
+    row = db_session.query(LinkStatsDaily).filter_by(link_id=link_id).one()
     assert row.clicks == 2
     assert row.stat_date.strftime("%Y%m%d") == _today()
 
@@ -84,7 +85,8 @@ def test_flush_twice_accumulates_not_overwrites(client, auth_headers, fake_redis
     stats.record_click(code)
     stats.flush_once(db_session)
 
-    row = db_session.query(LinkStatsDaily).one()
+    link_id = db_session.query(Link).filter_by(code=code).one().id
+    row = db_session.query(LinkStatsDaily).filter_by(link_id=link_id).one()
     assert row.clicks == 3
 
 

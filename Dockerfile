@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim AS base
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# 不从 ghcr.io 拷 uv 二进制：国内拉 ghcr.io 会卡死（实测 8 分钟零进展）。
+# 改用 pip 从阿里云镜像安装，几十秒完成，且不依赖额外 registry。
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ "uv>=0.13"
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \

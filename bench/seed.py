@@ -54,7 +54,9 @@ def main(total: int = 100_000, hot: int = 5000) -> None:
     except Exception as exc:  # noqa: BLE001 给出可操作的提示
         msg = str(exc).lower()
         if "no such table" in msg or "does not exist" in msg:
-            raise SystemExit("数据库里没有 links 表，请先执行: uv run alembic upgrade head") from exc
+            raise SystemExit(
+                "数据库里没有 links 表，请先执行: uv run alembic upgrade head"
+            ) from exc
         raise
 
     hot = min(hot, len(codes))

@@ -47,9 +47,7 @@ def _load_codes(environment, **kwargs):
     HOT_CODES.extend(_load(hot_path))
 
     if not ALL_CODES:
-        raise SystemExit(
-            f"没有找到 {all_path}，请先执行: uv run python bench/seed.py 100000 5000"
-        )
+        raise SystemExit(f"没有找到 {all_path}，请先执行: uv run python bench/seed.py 100000 5000")
     if not HOT_CODES:
         # 没生成热点文件时退化成前 5% 当热点
         HOT_CODES.extend(ALL_CODES[: max(1, len(ALL_CODES) // 20)])

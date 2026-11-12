@@ -28,7 +28,11 @@ async def main(host: str, hot_file: str = "bench/hot_codes.txt", concurrency: in
         raise SystemExit(f"{path} 是空的，先跑 bench/seed.py")
 
     ok = 0
-    async with httpx.AsyncClient(base_url=host, timeout=10.0, follow_redirects=False) as client:
+    # trust_env=False：不吃 HTTP_PROXY。否则本地 127.0.0.1 也会被塞进代理，
+    # 预热变成「预热代理」，命中率对不上还查不出原因。
+    async with httpx.AsyncClient(
+        base_url=host, timeout=10.0, follow_redirects=False, trust_env=False
+    ) as client:
         for i in range(0, len(codes), concurrency):
             batch = codes[i : i + concurrency]
             results = await asyncio.gather(

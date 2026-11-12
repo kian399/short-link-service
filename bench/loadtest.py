@@ -8,10 +8,16 @@
     BENCH_HOT_RATIO  热点请求占比，默认 0.8
     BENCH_CODES      全量码文件，默认 bench/codes.txt
     BENCH_HOT_CODES  热点码文件，默认 bench/hot_codes.txt
+    BENCH_FIXED_CODE 钉死一个码（打「缓存刚失效」的并发尖峰，验证 singleflight）
 
 为什么不是均匀随机：
 均匀打 10 万条、L1 只有 1 万条时，命中率上限 10%，缓存收益被容量稀释；
 80/20 的热点分布更接近真实流量，能把 L1 的价值打出来。
+
+为什么需要 BENCH_FIXED_CODE：
+80/20 场景下每个码的未命中窗口太短，200 并发里撞上同一个冷码的概率极低，
+singleflight 的 shared 计数恒为 0——D 组和 C 组的差异只是噪声。
+只有「同一个码 + 短 TTL」才能造出真实的回源尖峰。
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from locust import HttpUser, between, events, task
 
 ALL_CODES: list[str] = []
 HOT_CODES: list[str] = []
+FIXED_CODE: str = ""
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,17 +63,31 @@ def _load_codes(environment, **kwargs):
     random.shuffle(HOT_CODES)
     print(f"loaded {len(ALL_CODES)} codes, {len(HOT_CODES)} hot")
 
+    global FIXED_CODE
+    FIXED_CODE = os.getenv("BENCH_FIXED_CODE", "").strip()
+    if FIXED_CODE:
+        print(f"fixed code mode: /{FIXED_CODE}")
+
 
 class RedirectUser(HttpUser):
     wait_time = between(0, 0.001)
 
+    def on_start(self) -> None:
+        # 关掉环境代理。环境里若有 HTTP_PROXY（加速器/抓包工具留下的），
+        # requests 会把 127.0.0.1:8000 也交给代理转发：吞吐被吃掉一半，
+        # 代理抖一下就是成批的 status 0，数据全废。
+        self.client.trust_env = False
+
     @task
     def redirect(self):
-        if not ALL_CODES:
+        if FIXED_CODE:
+            code = FIXED_CODE
+        elif ALL_CODES:
+            hot_ratio = float(os.getenv("BENCH_HOT_RATIO", "0.8"))
+            pool = HOT_CODES if (HOT_CODES and random.random() < hot_ratio) else ALL_CODES
+            code = random.choice(pool)
+        else:
             return
-        hot_ratio = float(os.getenv("BENCH_HOT_RATIO", "0.8"))
-        pool = HOT_CODES if (HOT_CODES and random.random() < hot_ratio) else ALL_CODES
-        code = random.choice(pool)
         with self.client.get(
             f"/{code}",
             name="/{code}",

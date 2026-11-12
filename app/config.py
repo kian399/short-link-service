@@ -16,13 +16,15 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 3600
     LOG_LEVEL: str = "INFO"
 
-    # 性能相关：压测时可通过环境变量关掉某一层，做四组对比
+    # 性能相关：压测时可通过环境变量逐层关掉，做五组对比
     CACHE_L1_ENABLED: bool = True
     CACHE_L2_ENABLED: bool = True
+    SINGLEFLIGHT_ENABLED: bool = True
     L1_CACHE_SIZE: int = 10000
     L1_CACHE_TTL: float = 30.0
 
     # 点击统计：跳转只写 Redis 计数器，后台按这个间隔批量落库
+    STATS_RECORD_ENABLED: bool = True
     STATS_FLUSH_ENABLED: bool = True
     STATS_FLUSH_INTERVAL: int = 60
 

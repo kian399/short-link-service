@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.exceptions import LinkExpired, LinkNotFound
 from app.models.link import Link
@@ -52,8 +53,12 @@ def redirect_to_original(
 ):
     cached = get_cached_link(code)
     if cached is None:
-        # 击穿保护：同一短码的并发请求只放一个去查库
-        cached = single_flight.do(f"link:{code}", lambda: _load_from_db(code, db))
+        # 击穿保护：同一短码的并发请求只放一个去查库。
+        # 压测 D 组会关掉它，用来对比「有没有单飞」时 P99 的抖动差异。
+        if settings.SINGLEFLIGHT_ENABLED:
+            cached = single_flight.do(f"link:{code}", lambda: _load_from_db(code, db))
+        else:
+            cached = _load_from_db(code, db)
 
     if cached.get("miss"):
         raise LinkNotFound()
@@ -61,7 +66,9 @@ def redirect_to_original(
         delete_cached_link(code)
         raise LinkExpired()
 
-    # 埋点放在最终返回之前：只做一次 Redis 自增，不阻塞跳转
-    record_click(code)
+    # 埋点放在最终返回之前：只做一次 Redis 自增，不阻塞跳转。
+    # 压测 E 组会关掉它，用来量化「埋点对跳转的代价」。
+    if settings.STATS_RECORD_ENABLED:
+        record_click(code)
 
     return RedirectResponse(url=cached["url"], status_code=302)

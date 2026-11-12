@@ -11,3 +11,7 @@ wheels/
 
 # Environment variables
 .env
+# bench artifacts
+bench/codes.txt
+bench/hot_codes.txt
+bench/out/

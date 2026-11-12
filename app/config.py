@@ -28,5 +28,12 @@ class Settings(BaseSettings):
     STATS_FLUSH_ENABLED: bool = True
     STATS_FLUSH_INTERVAL: int = 60
 
+    # 连接池：这里的数字是「每个进程」的额度，不是全应用总额度。
+    # 多 worker 部署时 db.py 会按 WEB_CONCURRENCY 均分，否则 N×(pool+overflow)
+    # 会顶穿 PG 的 max_connections（实测 4 worker × 30 = 120 > 100，报
+    # "FATAL: sorry, too many clients already"）。
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+
 
 settings = Settings()

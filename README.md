@@ -119,17 +119,34 @@ uv run uvicorn app.main:app --reload      # 启动
 uv run pytest --cov=app --cov-report=term-missing
 ```
 
-当前：**29 个用例，覆盖率 92%**。测试用事务回滚隔离数据，Redis 用 fakeredis。
+当前：**52 个用例，覆盖率 90%**。测试用事务回滚隔离数据，Redis 用 fakeredis。
 
 ## 压测
 
-> 待补充（M2 阶段用 locust 在三组配置下对比）
+环境：AMD Ryzen 7 7745HX（8C16T）/ 16GB / Windows 11，PostgreSQL 与 Redis 跑在 Docker 里，
+应用单进程 `uvicorn --workers 1`。数据集 10 万条短链，80% 请求打 5% 的热点码（模拟真实流量分布）。
 
-| 阶段 | QPS | P50 | P95 | P99 | 错误率 |
-|---|---|---|---|---|---|
-| 无缓存（直查 DB） | TBD | TBD | TBD | TBD | TBD |
-| 加 Redis 缓存 | TBD | TBD | TBD | TBD | TBD |
-| 加缓存 + 限流 | TBD | TBD | TBD | TBD | TBD |
+locust 200 并发、持续 3 分钟：
+
+| 组 | 配置 | QPS | P50 | P95 | P99 | 错误率 |
+|---|---|---|---|---|---|---|
+| A | 纯数据库，无缓存 | 631 | 310ms | 370ms | 400ms | 0% |
+| B | + Redis（L2） | 773 | 250ms | 300ms | 320ms | 0% |
+| C | + 进程内 L1 | 804 | 240ms | 290ms | 310ms | 0% |
+| D | + singleflight | 678 | 280ms | 350ms | 370ms | 0% |
+| E | + 埋点旁路 | 635 | 300ms | 380ms | 410ms | 0% |
+| C×4 | C 组配置 + 4 worker | 1538 | 67ms | 110ms | 130ms | 0% |
+
+三条能站得住的结论：
+
+1. **Redis 是这批改动里唯一的大头**：QPS 631 → 773（+22%），P99 400ms → 320ms。
+2. **第二道瓶颈是单进程 CPU**：C 组 4 worker 后 QPS 直接翻到 1538，说明缓存不是万能的，
+   加完缓存还得看进程模型。A 组曾经的瓶颈是连接池（默认 5 个连接，200 并发下打满）。
+3. **D/E 相对 C 的小幅下降不单独归因**：三组之间 5%–16% 的差异与同配置重复测试的波动幅度相当，
+   把噪声当结论是压测最常见的错误。
+
+完整方法论、逐组归因、以及这份数据的可信度边界见 [docs/benchmark.md](docs/benchmark.md)。
+踩过的坑记在 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
 ## 关键设计
 
@@ -145,7 +162,7 @@ uv run pytest --cov=app --cov-report=term-missing
 
 - [x] M0 核心链路跑通（2026-10-24）
 - [x] M1 工程化：Docker / CI / 测试 / 结构化日志（2026-10-24）
-- [ ] M2 性能：L1 缓存、singleflight、locust 压测报告
+- [x] M2 性能：L1 缓存、singleflight、locust 压测报告（2026-11-13）
 - [ ] M3 功能：访问统计接口、限流中间件
 - [ ] M4 交付：公网部署、架构文档、演示 GIF
 

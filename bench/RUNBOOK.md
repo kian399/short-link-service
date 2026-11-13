@@ -1,6 +1,6 @@
 # 压测执行手册（B/C/D/E 四组）
 
-> 用法：从 B 组开始，一组一组照做。每组约 8 分钟（准备 3 分钟 + 压测 3 分钟 + 冷却 2 分钟）。
+> 用法：从 B 组开始，一组一组照做。每组约 8 分钟（准备 3 分钟 + 压测 3 分钟 + 冷却 2 分钟）。  
 > 四组做完约 35 分钟，然后填 `docs/benchmark.md`。
 
 ---
@@ -114,6 +114,8 @@ uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://1
 
 > 为什么提升不大：Redis 和你的服务在同一台机器，走 loopback 只要 0.1ms。L1 的价值在**跨机器部署**时才明显。
 
+
+
 ---
 
 ### D 组：加 singleflight
@@ -131,6 +133,7 @@ $env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_EN
 ```powershell
 uv run uvicorn app.main:app --port 8000
 ```
+
 ```powershell
 uv run python bench/prewarm.py http://127.0.0.1:8000
 uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://127.0.0.1:8000 --csv bench/out/mine_D1
@@ -157,6 +160,7 @@ $env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_EN
 ```powershell
 uv run uvicorn app.main:app --port 8000
 ```
+
 ```powershell
 uv run python bench/prewarm.py http://127.0.0.1:8000
 uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://127.0.0.1:8000 --csv bench/out/mine_E1
@@ -183,13 +187,13 @@ netstat -ano | findstr :8000
 
 ## 4. 记录表（边跑边填）
 
-| 组 | 场景 | 第 1 次 QPS | 第 2 次 QPS | 中位 QPS | 中位延迟 | P95 | P99 | 错误率 |
-|---|---|---|---|---|---|---|---|---|
-| A | 纯数据库 | — | — | 630.8 | 310 | 370 | 400 | 0% |
-| B | +Redis | | | | | | | |
-| C | +L1 | | | | | | | |
-| D | +singleflight | | | | | | | |
-| E | +埋点 | | | | | | | |
+| 组 | 场景            | 第 1 次 QPS | 第 2 次 QPS | 中位 QPS | 中位延迟 | P95 | P99 | 错误率 |
+| - | ------------- | --------- | --------- | ------ | ---- | --- | --- | --- |
+| A | 纯数据库          | —         | —         | 630.8  | 310  | 370 | 400 | 0%  |
+| B | +Redis        |           |           |        |      |     |     |     |
+| C | +L1           |           |           |        |      |     |     |     |
+| D | +singleflight |           |           |        |      |     |     |     |
+| E | +埋点           |           |           |        |      |     |     |     |
 
 每组的完整数据在 `bench/out/mine_X1_stats.csv`，用 Excel 打开看 `Requests/s`、`95%`、`99%` 三列。
 
@@ -212,8 +216,8 @@ Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory
 
 必须写到这个粒度：
 
-> A 组平局延迟 310ms，但单次查询只要 15ms（Min 值），说明 295ms 是排队。
-> 查 `/metrics` 发现 `db_pool_size=5`、`db_pool_checked_out=15`（打满），
+> A 组平局延迟 310ms，但单次查询只要 15ms（Min 值），说明 295ms 是排队。  
+> 查 `/metrics` 发现 `db_pool_size=5`、`db_pool_checked_out=15`（打满），  
 > 瓶颈在 SQLAlchemy 连接池。调大到 20 后，A 组 QPS 从 487 提到 631。
 
 **④ 结论**：一句话说清「缓存带来多少提升 + 当前瓶颈在哪」
@@ -222,13 +226,13 @@ Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory
 
 ## 6. 常见错误对照
 
-| 现象 | 原因 | 修法 |
-|---|---|---|
-| `10048` 端口被占 | 上一组 uvicorn 没退 | `Get-NetTCPConnection -LocalPort 8000` 杀掉 |
-| `--host: expected one argument` | 命令粘贴换行断了 | 写成一行 |
-| QPS 越跑越低 | 上一组缓存没清 | `redis-cli flushdb` |
-| 所有组 QPS 差不多 | 开关没生效（环境变量在启动时读取） | 改完必须重启 uvicorn |
-| Min 特别小但平均很大 | 正常，说明在排队 | 看连接池 / 并发数 |
+| 现象                              | 原因                | 修法                                        |
+| ------------------------------- | ----------------- | ----------------------------------------- |
+| `10048` 端口被占                    | 上一组 uvicorn 没退    | `Get-NetTCPConnection -LocalPort 8000` 杀掉 |
+| `--host: expected one argument` | 命令粘贴换行断了          | 写成一行                                      |
+| QPS 越跑越低                        | 上一组缓存没清           | `redis-cli flushdb`                       |
+| 所有组 QPS 差不多                     | 开关没生效（环境变量在启动时读取） | 改完必须重启 uvicorn                            |
+| Min 特别小但平均很大                    | 正常，说明在排队          | 看连接池 / 并发数                                |
 
 ---
 

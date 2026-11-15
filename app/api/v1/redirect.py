@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.exceptions import LinkExpired, LinkNotFound
+from app.middleware.ratelimit import limit_redirect
 from app.models.link import Link
 from app.services.cache import (
     delete_cached_link,
@@ -34,7 +35,7 @@ def _load_from_db(code: str, db: Session) -> dict:
     注意这里不再写点击：回源只是读路径，埋点统一在 302 之前做，
     这样缓存命中的请求也能被算进统计。
     """
-    link = db.query(Link).filter(Link.code == code).first()
+    link = db.query(Link).filter(Link.code == code, Link.is_active.is_(True)).first()
     if link is None:
         set_missing(code)
         return {"miss": True}
@@ -46,7 +47,7 @@ def _load_from_db(code: str, db: Session) -> dict:
     return {"url": link.original_url, "expires_at": link.expires_at}
 
 
-@router.get("/{code}")
+@router.get("/{code}", dependencies=[Depends(limit_redirect)])
 def redirect_to_original(
     code: str,
     db: Session = Depends(get_db),

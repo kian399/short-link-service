@@ -14,4 +14,4 @@ wheels/
 # bench artifacts
 bench/codes.txt
 bench/hot_codes.txt
-bench/out/
+bench/out/.vscode/

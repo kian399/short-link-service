@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -14,6 +24,8 @@ class Link(Base):
     original_url = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
+    # 软删除：删除只置 false，跳转按不存在处理；物理行保留，统计不会随删除消失
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
     clicks = relationship(
         "ClickStat", back_populates="link", cascade="all, delete-orphan", passive_deletes=True

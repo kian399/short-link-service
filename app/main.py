@@ -11,7 +11,7 @@ from app.api.v1.links import router as links_router
 from app.api.v1.redirect import router as redirect_router
 from app.config import settings
 from app.db import SessionLocal
-from app.exceptions import AliasConflict, LinkExpired, LinkNotFound, Unauthorized
+from app.exceptions import AliasConflict, LinkExpired, LinkNotFound, RateLimited, Unauthorized
 from app.logging_config import configure_logging
 from app.middleware.metrics import MetricsMiddleware
 from app.middleware.request_id import RequestIDMiddleware
@@ -81,6 +81,15 @@ async def alias_conflict_handler(request: Request, exc: AliasConflict):
 @app.exception_handler(Unauthorized)
 async def unauthorized_handler(request: Request, exc: Unauthorized):
     return JSONResponse(status_code=401, content={"detail": "API Key 无效"})
+
+
+@app.exception_handler(RateLimited)
+async def rate_limited_handler(request: Request, exc: RateLimited):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "请求过于频繁，请稍后重试"},
+        headers={"Retry-After": str(exc.retry_after)},
+    )
 
 
 @app.exception_handler(Exception)

@@ -12,15 +12,14 @@ GETDEL 是原子的，但一旦后续写库失败，这批点击就永久丢了
 扣减用 DECRBY 只减掉「已落库的那部分」，期间新增的点击不受影响。
 """
 
-from __future__ import annotations
-
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app import redis_client as redis_module
+from app.models.link import Link, LinkStatsDaily
 
 logger = structlog.get_logger(__name__)
 
@@ -126,3 +125,48 @@ def flush_once(db: Session) -> int:
     ack_counts(rows)
     logger.info("stats_flushed", codes=len(rows), clicks=sum(r[3] for r in rows))
     return len(rows)
+
+
+def pending_clicks(code: str) -> int:
+    """Redis 里还没落库的今日点击数。"""
+    key = f"{KEY_PREFIX}{code}:{_today()}"
+    try:
+        raw = redis_module.redis_client.get(key)
+        return int(raw) if raw else 0
+    except Exception:  # noqa: BLE001 统计读失败不能影响接口
+        logger.warning("pending_clicks_failed", code=code, exc_info=True)
+        return 0
+
+
+def read_stats(db: Session, code: str, days: int = 7) -> dict:
+    """汇总某短码的点击：DB 已落库 + Redis 未落库的今日部分。
+
+    两边必须合并，否则「刚点的几下降查不到」——这是埋点旁路最常见的坑。
+    """
+    since = datetime.now(UTC).date() - timedelta(days=days - 1)
+
+    rows = db.execute(
+        select(LinkStatsDaily.stat_date, LinkStatsDaily.clicks)
+        .join(Link, Link.id == LinkStatsDaily.link_id)
+        .where(Link.code == code, LinkStatsDaily.stat_date >= since)
+        .order_by(LinkStatsDaily.stat_date)
+    ).all()
+
+    total = db.execute(
+        select(func.coalesce(func.sum(LinkStatsDaily.clicks), 0))
+        .join(Link, Link.id == LinkStatsDaily.link_id)
+        .where(Link.code == code)
+    ).scalar_one()
+
+    pending = pending_clicks(code)
+    by_day = {row[0].isoformat(): int(row[1]) for row in rows}
+    today = datetime.now(UTC).date().isoformat()
+    if pending:
+        by_day[today] = by_day.get(today, 0) + pending
+
+    return {
+        "code": code,
+        "total_clicks": int(total) + pending,
+        "pending_today": pending,
+        "daily": [{"date": day, "clicks": clicks} for day, clicks in sorted(by_day.items())],
+    }

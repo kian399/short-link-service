@@ -35,5 +35,10 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
 
+    # 限流：跳转按客户端 IP，创建按 API Key（固定窗口 60 秒）
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REDIRECT_PER_MIN: int = 600
+    RATE_LIMIT_CREATE_PER_MIN: int = 60
+
 
 settings = Settings()

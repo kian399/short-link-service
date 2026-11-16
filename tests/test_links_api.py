@@ -88,7 +88,9 @@ def test_link_row_is_written(client, auth_headers, db_session):
 
 
 def test_list_links_paginated(client, auth_headers):
-    # 开发库里可能有压测灌的历史数据，所以用相对增量断言，不写死绝对值
+    # 开发库里可能有压测灌的历史数据，所以用相对增量断言，不写死绝对值。
+    # 但第二页的条数必须按「剩余条数」算：CI 是空库（baseline = 0），
+    # 3 条数据翻两页，第二页只有 1 条——之前写死 2 导致 CI 红、本地绿。
     baseline = client.get("/api/v1/links?page=1&size=1", headers=auth_headers).json()["total"]
     for i in range(3):
         _create(client, auth_headers, original_url=f"https://example.com/p{i}")
@@ -102,7 +104,10 @@ def test_list_links_paginated(client, auth_headers):
     assert len(body["items"]) == 2
 
     resp2 = client.get("/api/v1/links?page=2&size=2", headers=auth_headers)
-    assert len(resp2.json()["items"]) == 2
+    items2 = resp2.json()["items"]
+    assert len(items2) == min(2, baseline + 1)
+    # 两页之间不能出现重复的短码
+    assert not {item["code"] for item in body["items"]} & {item["code"] for item in items2}
 
 
 def test_list_excludes_soft_deleted(client, auth_headers):

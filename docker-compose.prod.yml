@@ -40,6 +40,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENV: prod
       LOG_LEVEL: INFO
+      # 只有 nginx 能连到 app，所以可以信任它写的 X-Real-IP；
+      # 不打开的话所有请求的 client.host 都是 nginx 的容器 IP，限流会误伤整站。
+      TRUST_PROXY_HEADERS: "true"
     depends_on:
       postgres:
         condition: service_healthy

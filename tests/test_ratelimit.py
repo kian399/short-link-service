@@ -83,3 +83,42 @@ def test_rejection_increments_metric(client, auth_headers, fake_redis, monkeypat
     body = metrics.render()
     assert "rate_limited_total" in body
     assert 'scope="redirect"' in body
+
+
+def test_trusted_proxy_header_splits_buckets(client, auth_headers, fake_redis, monkeypatch):
+    """反代后面按真实客户端 IP 分桶：不同 IP 各自计数，不能共用一个桶。"""
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    code = _create(client, auth_headers)
+
+    client.get(f"/{code}", follow_redirects=False, headers={"X-Real-IP": "1.1.1.1"})
+    client.get(f"/{code}", follow_redirects=False, headers={"X-Real-IP": "1.1.1.1"})
+    client.get(f"/{code}", follow_redirects=False, headers={"X-Real-IP": "2.2.2.2"})
+
+    assert fake_redis.get("rl:redirect:1.1.1.1") == "2"
+    assert fake_redis.get("rl:redirect:2.2.2.2") == "1"
+
+
+def test_trusted_proxy_uses_rightmost_forwarded_for(client, auth_headers, fake_redis, monkeypatch):
+    """没有 X-Real-IP 时取 X-Forwarded-For 最右一跳（反代追加的那一跳，客户端伪造不了）。"""
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    code = _create(client, auth_headers)
+
+    client.get(
+        f"/{code}",
+        follow_redirects=False,
+        headers={"X-Forwarded-For": "6.6.6.6, 7.7.7.7"},
+    )
+
+    assert fake_redis.get("rl:redirect:7.7.7.7") == "1"
+    assert fake_redis.get("rl:redirect:6.6.6.6") is None
+
+
+def test_proxy_header_ignored_when_not_trusted(client, auth_headers, fake_redis, monkeypatch):
+    """直连部署时不能信 X-Real-IP，否则客户端换个头就绕过限流。"""
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", False)
+    code = _create(client, auth_headers)
+
+    client.get(f"/{code}", follow_redirects=False, headers={"X-Real-IP": "1.1.1.1"})
+
+    assert fake_redis.get("rl:redirect:1.1.1.1") is None
+    assert fake_redis.get("rl:redirect:testclient") == "1"

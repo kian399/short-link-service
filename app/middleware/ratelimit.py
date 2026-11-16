@@ -55,10 +55,27 @@ def _enforce(scope: str, identity: str, limit: int) -> None:
     raise RateLimited(retry_after=retry_after)
 
 
+def _client_ip(request: Request) -> str:
+    """取真实客户端 IP。
+
+    直连时用 request.client.host；部署在 nginx 后面时它是反代的地址，
+    必须读反代写的头，否则整站共用一个限流桶。取 X-Forwarded-For 的最右一跳：
+    那一跳是离我们最近的反代追加的，客户端伪造不了（nginx 用
+    $proxy_add_x_forwarded_for，把 $remote_addr 追加在末尾）。
+    """
+    if settings.TRUST_PROXY_HEADERS:
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip.strip()
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def limit_redirect(request: Request) -> None:
     """跳转接口的依赖：按客户端 IP 限流。"""
-    ip = request.client.host if request.client else "unknown"
-    _enforce("redirect", ip, settings.RATE_LIMIT_REDIRECT_PER_MIN)
+    _enforce("redirect", _client_ip(request), settings.RATE_LIMIT_REDIRECT_PER_MIN)
 
 
 def limit_create(api_key: str = Depends(verify_api_key)) -> str:

@@ -40,5 +40,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_REDIRECT_PER_MIN: int = 600
     RATE_LIMIT_CREATE_PER_MIN: int = 60
 
+    # 部署在反代后面时必须打开，否则 request.client.host 全是 nginx 的容器 IP，
+    # 所有用户共用一个限流桶（实测：整站 600/分钟，等于没限流还误伤用户）。
+    # 只在本机/内网能直连 app 时保持 False，避免客户端伪造 X-Real-IP 绕过限流。
+    TRUST_PROXY_HEADERS: bool = False
+
 
 settings = Settings()

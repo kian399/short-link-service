@@ -1,4 +1,4 @@
-"""五组压测一键执行：A 纯DB → B +Redis → C +L1 → D +singleflight → E +埋点。
+"""压测一键执行：A 纯DB → B +Redis → C +L1 → D +singleflight → E +埋点 → F C+限流。
 
 为什么要有这个脚本：
 手工开五个终端、每组改四个开关、忘了 flushdb、忘了换 CSV 前缀，
@@ -10,7 +10,7 @@ Git Bash 里 `kill $!` 会把整个作业组带走，脚本自己被 SIGTERM，
 CREATE_NEW_PROCESS_GROUP + terminate 才是可靠的。
 
 用法（仓库根目录）：
-    .venv/Scripts/python.exe bench/run_all_groups.py            # 五组，每组 3 分钟
+    .venv/Scripts/python.exe bench/run_all_groups.py            # 六组，每组 3 分钟
     .venv/Scripts/python.exe bench/run_all_groups.py A C        # 只跑指定组
     .venv/Scripts/python.exe bench/run_all_groups.py --duration 1m --users 50
 
@@ -34,7 +34,10 @@ PORT = int(os.getenv("BENCH_PORT", "8000"))
 HOST = f"http://127.0.0.1:{PORT}"
 PY = sys.executable
 
-# 每组的开关组合；A–D 关埋点，E 全开，这样 E−D 的差值就是「一次 Redis INCR」的代价
+# 每组的开关组合；A–D 关埋点，E 全开，这样 E−D 的差值就是「一次 Redis INCR」的代价。
+# RATE_LIMIT_ENABLED 在 A–E 一律关掉：限流按 IP 600/分钟，压测全从 127.0.0.1 打，
+# 不关的话 600 个请求之后就全是 429（M3 之后第一次跑压测就踩了这个）。
+# F 组反过来：把限流打开、阈值拉到不可能触发，只量化「跳转路上多一次 Lua EVAL」的代价。
 GROUP_ENV: dict[str, dict[str, str]] = {
     "A": {
         "CACHE_L1_ENABLED": "false",
@@ -42,6 +45,7 @@ GROUP_ENV: dict[str, dict[str, str]] = {
         "SINGLEFLIGHT_ENABLED": "false",
         "STATS_RECORD_ENABLED": "false",
         "STATS_FLUSH_ENABLED": "false",
+        "RATE_LIMIT_ENABLED": "false",
     },
     "B": {
         "CACHE_L1_ENABLED": "false",
@@ -49,6 +53,7 @@ GROUP_ENV: dict[str, dict[str, str]] = {
         "SINGLEFLIGHT_ENABLED": "false",
         "STATS_RECORD_ENABLED": "false",
         "STATS_FLUSH_ENABLED": "false",
+        "RATE_LIMIT_ENABLED": "false",
     },
     "C": {
         "CACHE_L1_ENABLED": "true",
@@ -56,6 +61,7 @@ GROUP_ENV: dict[str, dict[str, str]] = {
         "SINGLEFLIGHT_ENABLED": "false",
         "STATS_RECORD_ENABLED": "false",
         "STATS_FLUSH_ENABLED": "false",
+        "RATE_LIMIT_ENABLED": "false",
     },
     "D": {
         "CACHE_L1_ENABLED": "true",
@@ -63,6 +69,7 @@ GROUP_ENV: dict[str, dict[str, str]] = {
         "SINGLEFLIGHT_ENABLED": "true",
         "STATS_RECORD_ENABLED": "false",
         "STATS_FLUSH_ENABLED": "false",
+        "RATE_LIMIT_ENABLED": "false",
     },
     "E": {
         "CACHE_L1_ENABLED": "true",
@@ -70,6 +77,17 @@ GROUP_ENV: dict[str, dict[str, str]] = {
         "SINGLEFLIGHT_ENABLED": "true",
         "STATS_RECORD_ENABLED": "true",
         "STATS_FLUSH_ENABLED": "true",
+        "RATE_LIMIT_ENABLED": "false",
+    },
+    # F 与 C 同配置，只多开限流（阈值拉到 1 亿，不会触发 429）
+    "F": {
+        "CACHE_L1_ENABLED": "true",
+        "CACHE_L2_ENABLED": "true",
+        "SINGLEFLIGHT_ENABLED": "false",
+        "STATS_RECORD_ENABLED": "false",
+        "STATS_FLUSH_ENABLED": "false",
+        "RATE_LIMIT_ENABLED": "true",
+        "RATE_LIMIT_REDIRECT_PER_MIN": "100000000",
     },
 }
 

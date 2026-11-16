@@ -20,6 +20,7 @@ LABELS = {
     "C": "C +L1",
     "D": "D +singleflight",
     "E": "E +埋点",
+    "F": "F C+限流(EVAL)",
 }
 
 

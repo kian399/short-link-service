@@ -3,6 +3,11 @@
 > 用法：从 B 组开始，一组一组照做。每组约 8 分钟（准备 3 分钟 + 压测 3 分钟 + 冷却 2 分钟）。  
 > 四组做完约 35 分钟，然后填 `docs/benchmark.md`。
 
+> ⚠️ **M3 之后新增前提：压测必须关掉限流。** 跳转限流是「按 IP 600/分钟」，
+> 而压测全部从 `127.0.0.1` 打，不关的话第 601 个请求开始全是 429，QPS 曲线假性暴跌。
+> 每组的开关里都带着 `RATE_LIMIT_ENABLED='false'`；`run_all_groups.py` 已经内置。
+> 想单独量化限流本身的代价，用 F 组（把阈值拉到 1 亿，不触发 429）。
+
 ---
 
 ## 0. 基线（A 组）直接用这个
@@ -44,7 +49,7 @@ docker compose exec redis redis-cli flushdb
 **③ 清掉上一组的环境变量**（避免残留开关污染）
 
 ```powershell
-Remove-Item Env:CACHE_L1_ENABLED, Env:CACHE_L2_ENABLED, Env:SINGLEFLIGHT_ENABLED, Env:STATS_RECORD_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:CACHE_L1_ENABLED, Env:CACHE_L2_ENABLED, Env:SINGLEFLIGHT_ENABLED, Env:STATS_RECORD_ENABLED, Env:RATE_LIMIT_ENABLED -ErrorAction SilentlyContinue
 ```
 
 **④ 确认容器状态**
@@ -66,7 +71,7 @@ docker compose ps
 **开关**
 
 ```powershell
-$env:CACHE_L1_ENABLED='false'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='false'; $env:STATS_RECORD_ENABLED='false'
+$env:CACHE_L1_ENABLED='false'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='false'; $env:STATS_RECORD_ENABLED='false'; $env:RATE_LIMIT_ENABLED='false'
 ```
 
 **起服务（窗口 1，占住不关）**
@@ -94,7 +99,7 @@ uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://1
 **开关**
 
 ```powershell
-$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='false'; $env:STATS_RECORD_ENABLED='false'
+$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='false'; $env:STATS_RECORD_ENABLED='false'; $env:RATE_LIMIT_ENABLED='false'
 ```
 
 **起服务**
@@ -125,7 +130,7 @@ uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://1
 **开关**
 
 ```powershell
-$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='true'; $env:STATS_RECORD_ENABLED='false'
+$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='true'; $env:STATS_RECORD_ENABLED='false'; $env:RATE_LIMIT_ENABLED='false'
 ```
 
 **起服务 + 压测**
@@ -152,7 +157,7 @@ uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://1
 **开关**
 
 ```powershell
-$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='true'; $env:STATS_RECORD_ENABLED='true'
+$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='true'; $env:STATS_RECORD_ENABLED='true'; $env:RATE_LIMIT_ENABLED='false'
 ```
 
 **起服务 + 压测**
@@ -167,6 +172,33 @@ uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://1
 ```
 
 **预期**：QPS 比 D 组低 5–10%，延迟高 10–20ms
+
+---
+
+### F 组：C 的配置 + 限流打开（阈值拉满）
+
+**目的**：量化 M3 新加的限流在跳转路上花了多少——每次跳转多一次 Redis `EVAL`。
+阈值设成 1 亿，保证不会触发 429，测到的只是「多一次脚本调用」的纯成本。
+
+**开关**
+
+```powershell
+$env:CACHE_L1_ENABLED='true'; $env:CACHE_L2_ENABLED='true'; $env:SINGLEFLIGHT_ENABLED='false'; $env:STATS_RECORD_ENABLED='false'; $env:RATE_LIMIT_ENABLED='true'; $env:RATE_LIMIT_REDIRECT_PER_MIN='100000000'
+```
+
+**起服务 + 压测**
+
+```powershell
+uv run uvicorn app.main:app --port 8000
+```
+
+```powershell
+uv run python bench/prewarm.py http://127.0.0.1:8000
+uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://127.0.0.1:8000 --csv bench/out/mine_F1
+```
+
+**预期**：QPS 比 C 组低 3–8%，P99 高 5–15ms。差值只是量级参考，别当精确值——
+它和组间噪声是同一个量级。
 
 ---
 
@@ -194,6 +226,7 @@ netstat -ano | findstr :8000
 | C | +L1           |           |           |        |      |     |     |     |
 | D | +singleflight |           |           |        |      |     |     |     |
 | E | +埋点           |           |           |        |      |     |     |     |
+| F | C+限流(EVAL)    |           |           |        |      |     |     |     |
 
 每组的完整数据在 `bench/out/mine_X1_stats.csv`，用 Excel 打开看 `Requests/s`、`95%`、`99%` 三列。
 

@@ -94,5 +94,9 @@ class RedirectUser(HttpUser):
             allow_redirects=False,
             catch_response=True,
         ) as resp:
-            if resp.status_code != 302:
+            if resp.status_code == 429:
+                # M3 加了限流（跳转按 IP 600/分钟）。压测全从 127.0.0.1 打，
+                # 忘关的话第一批 600 个之后全是 429，QPS 曲线会假性暴跌。
+                resp.failure("429 限流：压测前必须设 RATE_LIMIT_ENABLED=false")
+            elif resp.status_code != 302:
                 resp.failure(f"unexpected status {resp.status_code}")

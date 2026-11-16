@@ -11,6 +11,11 @@ wheels/
 
 # Environment variables
 .env
+# 测试与覆盖率产物
+.coverage
+htmlcov/
+.tmp_test.db
+
 # bench artifacts
 bench/codes.txt
 bench/hot_codes.txt

@@ -2,6 +2,34 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-15
+
+### Added
+- `GET /api/v1/links/{code}/stats?days=7`：按天点击统计，合并已落库的日聚合与 Redis 里还没落库的今日计数
+- Redis Lua 固定窗口限流：跳转按客户端 IP 600/分钟、创建按 API Key 60/分钟，超限 429 + `Retry-After`
+- 分页列表 `GET /api/v1/links`、`PATCH /api/v1/links/{code}` 改目标地址 / 过期时间，写操作统一失效缓存
+- 删除改软删除（`is_active`，迁移 `0005_soft_delete`）：跳转 404，历史统计保留
+- 生产编排 `docker-compose.prod.yml` + `nginx/nginx.conf` + `.env.prod.example`
+
+### Fixed
+- 统计漏记：埋点移到 302 之前，缓存命中也计数；回源不再同步写库
+- 统计测试按 `link_id` 隔离，避免相互污染
+- 分页用例在空库（CI）下第二页条数断言错误，CI 连红三次
+
+## [0.3.0] - 2026-11-13
+
+### Added
+- 进程内 L1 缓存（TTLCache，10000 条 / 30s）、Redis L2、空值缓存，以及 singleflight 防击穿
+- `/metrics` 手写 Prometheus 文本指标：QPS、P50/P95/P99 直方图、L1 命中率、连接池水位
+- 点击埋点旁路：跳转只做一次 Redis INCR，后台每 60s 批量 UPSERT 到 `link_stats_daily`
+- `bench/`：10 万条 seed、locust 80/20 热点分布、A–E 五组对比脚本与 RUNBOOK
+
+### Changed
+- 数据库连接池显式配置，并按 `WEB_CONCURRENCY` 均分，避免多 worker 顶穿 PG `max_connections`
+
+### Docs
+- `docs/benchmark.md`：五组压测报告与可信度边界；`docs/troubleshooting.md`：8 个真实踩坑
+
 ## [0.2.0] - 2026-10-24
 
 ### Added

@@ -44,13 +44,16 @@ curl -X POST http://127.0.0.1:8000/api/v1/links \
 
 ## API
 
-| 方法     | 路径                     | 说明    | 状态码                   |
-| ------ | ---------------------- | ----- | --------------------- |
-| POST   | `/api/v1/links`        | 创建短链  | 201 / 401 / 409 / 422 |
-| GET    | `/api/v1/links/{code}` | 查询元信息 | 200 / 401 / 404       |
-| DELETE | `/api/v1/links/{code}` | 删除    | 204 / 401 / 404       |
-| GET    | `/{code}`              | 跳转    | 302 / 404 / 410       |
-| GET    | `/healthz`             | 健康检查  | 200                   |
+| 方法     | 路径                             | 说明            | 状态码                             |
+| ------ | ------------------------------ | ------------- | ------------------------------- |
+| POST   | `/api/v1/links`                | 创建短链          | 201 / 401 / 409 / 422 / 429     |
+| GET    | `/api/v1/links`                | 分页列出未删除的短链    | 200 / 401                       |
+| GET    | `/api/v1/links/{code}`         | 查询元信息         | 200 / 401 / 404                 |
+| PATCH  | `/api/v1/links/{code}`         | 改目标地址 / 过期时间  | 200 / 401 / 404 / 422 / 429     |
+| DELETE | `/api/v1/links/{code}`         | 软删除，跳转变 404  | 204 / 401 / 404                 |
+| GET    | `/api/v1/links/{code}/stats`   | 按天点击统计        | 200 / 401 / 404 / 422           |
+| GET    | `/{code}`                      | 跳转            | 302 / 404 / 410 / 429           |
+| GET    | `/healthz`                     | 健康检查          | 200                             |
 
 请求示例：
 
@@ -73,18 +76,21 @@ curl -X POST http://127.0.0.1:8000/api/v1/links \
 ## 架构
 
 ```
-             ┌──────────────┐
-  GET /code  │   FastAPI    │
- ──────────► │              │
-             └──────┬───────┘
-                    │ 1. GET link:{code}
-             ┌──────▼───────┐  命中 ──► 302
-             │    Redis     │
-             └──────┬───────┘
-                    │ 未命中
-             ┌──────▼───────┐
-             │  PostgreSQL  │ ──► 回填缓存 ──► 302
-             └──────────────┘
+             ┌────────────────┐
+  GET /code  │    FastAPI     │
+ ──────────► │ 限流 → L1(进程) │
+             └───────┬────────┘
+                     │ L1 未命中（singleflight：同码并发只放一个回源）
+             ┌───────▼────────┐  命中 ──► 302
+             │     Redis      │
+             └───────┬────────┘
+                     │ 未命中
+             ┌───────▼────────┐
+             │   PostgreSQL   │ ──► 回填 L2/L1 ──► 302
+             └────────────────┘
+
+  302 之前：Redis INCR 记点击（不阻塞跳转）
+  后台每 60s：读计数 → UPSERT link_stats_daily → 扣减
 ```
 
 ## 目录结构
@@ -92,20 +98,24 @@ curl -X POST http://127.0.0.1:8000/api/v1/links \
 ```
 short-link-service/
 ├── app/
-│   ├── main.py              # FastAPI 实例、异常处理、路由注册
-│   ├── config.py            # pydantic-settings 配置
-│   ├── db.py                # engine / session 依赖
+│   ├── main.py              # FastAPI 实例、异常处理、埋点落库后台任务
+│   ├── config.py            # pydantic-settings 配置（缓存/限流/埋点开关）
+│   ├── db.py                # engine / session 依赖（连接池按 worker 均分）
 │   ├── redis_client.py      # Redis 连接
-│   ├── logging_config.py    # structlog 配置
-│   ├── middleware/          # Request-ID 中间件
+│   ├── metrics.py           # 手写 Prometheus 文本指标，/metrics 暴露
+│   ├── middleware/          # Request-ID / 指标 / 限流
 │   ├── models/              # ORM 模型
 │   ├── schemas/             # 请求/响应模型
-│   ├── services/            # 短码生成、缓存
-│   └── api/v1/              # 创建/查询/删除、跳转
+│   ├── services/            # 短码、缓存(L1/L2)、singleflight、统计
+│   └── api/v1/              # 创建/列表/查询/编辑/删除/统计、跳转
 ├── alembic/                 # 数据库迁移
-├── tests/                   # 单元 + 接口 + 缓存测试
+├── bench/                   # seed / locust / 五组压测编排 / RUNBOOK
+├── docs/                    # benchmark 报告、troubleshooting
+├── nginx/                   # 生产反代配置
+├── tests/                   # 单元 + 接口 + 缓存 + 限流测试
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml       # 本地：app + pg + redis
+├── docker-compose.prod.yml  # 生产：只有 nginx 暴露 80
 └── .github/workflows/ci.yml
 ```
 
@@ -118,13 +128,24 @@ uv run alembic upgrade head               # 建表
 uv run uvicorn app.main:app --reload      # 启动
 ```
 
+## 部署
+
+```bash
+cp .env.prod.example .env        # 改 API_KEY、POSTGRES_PASSWORD、BASE_URL 为域名
+docker compose -f docker-compose.prod.yml up -d --build
+curl http://<服务器 IP>/healthz  # 返回 {"status":"ok"} 即成功
+```
+
+只有 nginx 暴露 80，app / postgres / redis 都在 compose 内网；app 启动时自动 `alembic upgrade head`。
+反代细节在 [nginx/nginx.conf](nginx/nginx.conf)（upstream keepalive、302 不缓冲、`/healthz` 不写日志）。
+
 ## 测试
 
 ```bash
 uv run pytest --cov=app --cov-report=term-missing
 ```
 
-当前：**52 个用例，覆盖率 90%**。测试用事务回滚隔离数据，Redis 用 fakeredis。
+当前：**67 个用例，覆盖率 90%**。测试用事务回滚隔离数据，Redis 用 fakeredis（限流的 Lua 由 lupa 执行）。
 
 ## 压测
 
@@ -132,7 +153,7 @@ uv run pytest --cov=app --cov-report=term-missing
   
 应用单进程 `uvicorn --workers 1`。数据集 10 万条短链，80% 请求打 5% 的热点码（模拟真实流量分布）。
 
-locust 200 并发、持续 3 分钟：
+locust 200 并发、持续 3 分钟（下表是 M2 收尾时的基线；M3 的限流让跳转多了一次 Redis 调用，重测后更新）：
 
 | 组   | 配置               | QPS  | P50   | P95   | P99   | 错误率 |
 | --- | ---------------- | ---- | ----- | ----- | ----- | --- |
@@ -165,15 +186,15 @@ locust 200 并发、持续 3 分钟：
 
 **为什么要空值缓存**：不存在的短码会被反复查询打穿到数据库，用一个 60 秒的 `__MISS__` 占位挡住。
 
-**为什么删除要级联**：`click_stats` 通过外键 `ON DELETE CASCADE` 跟随删除，避免出现孤儿统计行，也避免删除时因外键约束报 500。
+**为什么删除是软删除**：把 `is_active` 置 false，跳转立刻 404，但 `link_stats_daily` 里的日聚合还留着——删链接不该顺手删掉历史数据。读路径统一带 `is_active` 过滤，写操作（PATCH / DELETE）主动删缓存，避免旧值被回填。
 
 ## Roadmap
 
 - [x] M0 核心链路跑通（2026-10-24）
 - [x] M1 工程化：Docker / CI / 测试 / 结构化日志（2026-10-24）
 - [x] M2 性能：L1 缓存、singleflight、locust 压测报告（2026-11-13）
-- [ ] M3 功能：访问统计接口、限流中间件
-- [ ] M4 交付：公网部署、架构文档、演示 GIF
+- [x] M3 功能：统计接口、限流中间件、分页 / PATCH / 软删除（2026-11-15）
+- [ ] M4 交付：公网部署、M3 后回归压测、演示 GIF
 
 ## 明确不做
 

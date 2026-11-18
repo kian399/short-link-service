@@ -169,3 +169,42 @@ curl -s localhost:8000/metrics | grep db_pool
 
 **结论**：看延迟永远先看 `Min` 和 `P50` 的差距，再看资源池的占用。
 `Min` 是系统在无竞争时的真实能力。
+
+---
+
+## 9. nginx 502：容器重建后 upstream 还在打老 IP
+
+**现象**：`docker compose -f docker-compose.prod.yml up -d --force-recreate app` 之后，
+app 明明 `Up (healthy)`，但访问 `http://127.0.0.1:8080/healthz` 一直是 `502 Bad Gateway`。
+
+**排查**：
+
+```bash
+docker logs --tail 5 short-link-service-nginx-1
+# connect() failed (111: Connection refused) ...
+# upstream: "http://172.18.0.4:8000/healthz"
+
+docker inspect short-link-service-app-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+# 172.18.0.5     ← 实际已经是 .5，nginx 还在打 .4
+```
+
+**原因**：nginx 启动时把 `upstream` 里的主机名解析成 IP 并**缓存一辈子**（非商业版不做动态解析）。
+app 容器重建后 Docker 分配了新 IP，nginx 不知道。
+
+**解决**：改完 app 必须重启 nginx。
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart nginx
+```
+
+**教训**：凡是 `upstream` 写容器名的，**每次发布应用都要重启 nginx**。
+想让 nginx 自己跟踪 IP，得放弃 upstream 块改用变量 + Docker 内置 DNS：
+
+```nginx
+resolver 127.0.0.11 valid=10s ipv6=off;
+set $upstream_app app:8000;
+proxy_pass http://$upstream_app;
+```
+
+代价是失去 upstream 的 `keepalive` 连接复用。短链这种高并发场景 keepalive 更值钱，
+所以这里选择「保留 upstream + 发布时重启 nginx」。

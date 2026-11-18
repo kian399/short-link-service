@@ -178,6 +178,26 @@ locust 200 并发、持续 3 分钟（下表是 M2 收尾时的基线；M3 的�
   
 踩过的坑记在 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
+## 生产部署
+
+```bash
+cp .env.prod.example .env.prod
+# 改三处：API_KEY、POSTGRES_PASSWORD、BASE_URL（改成域名或公网 IP）
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+只有 nginx 暴露 80，app / postgres / redis 全在内网。数据库迁移在 app 启动时自动执行。
+
+**更新应用后必须重启 nginx**：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build app
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart nginx
+```
+
+nginx 启动时会把 upstream 的容器名解析成 IP 并缓存，app 容器重建后 IP 变了会 502。
+详见 [docs/troubleshooting.md](docs/troubleshooting.md) 第 9 条。
+
 ## 关键设计
 
 **短码为什么是随机 7 位**：62^7 ≈ 3.5 万亿，业务量级下碰撞概率可忽略；数据库唯一索引兜底，撞了就重试 3 次。相比“发号器 + Base62”，随机码不可枚举，也不需要额外发号服务。

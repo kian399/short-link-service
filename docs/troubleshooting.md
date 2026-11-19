@@ -164,3 +164,33 @@ Docker Desktop 那次只起了 redis，postgres 容器没起来。而 `/healthz`
 - 每组跑完检查 `stats.csv` 的失败数和 P50，不达标就 `SystemExit`，别让人拿着废数据写报告。
 
 教训：健康检查只证明进程活着。想证明链路通，得打一个真正查库的接口。
+
+## 11. 压测完之后，端口一直被占用、内存悄悄少一个 G
+
+11 月 19 号做 1/2/4 worker 对照，跑完第三组，下一次开跑直接报「端口 8000 仍被占用」。
+`netstat -ano | findstr :8000` 显示的 PID 已经不存在了，但端口还在 LISTEN。
+
+顺手看了一眼任务管理器：机器上挂着十个 `python.exe`，每个 100MB 左右，命令行都是
+`from multiprocessing...`。都是前几轮 `--workers 4` 留下的 uvicorn 子进程。
+
+原因很简单：`run_all_groups.py` 收尾时只 `terminate()` 父进程。单 worker 时父进程就是 worker，
+一起退；多 worker 时子进程是独立进程，父进程死了它们还活着，攥着 8000 端口不放。
+
+更糟的是内存。这台机器 16G，平时可用 4G 左右，十个僵尸进程把可用内存啃到 600MB，
+Docker Desktop 的 Linux VM 拿不到内存，直接把 app 容器杀了（`ExitCode 137`，
+`OOMKilled=false`，是宿主机层面的挤压）。表现就是演示到一半 502，看容器状态是 Exited。
+
+修法是在 `finally` 里按进程树杀：
+
+```python
+if os.name == "nt":
+    subprocess.run(["taskkill", "/PID", str(app.pid), "/T", "/F"], capture_output=True)
+else:
+    app.terminate()
+```
+
+`taskkill /T` 会连子进程一起收掉。Linux 上靠进程组，或者用 `psutil` 递归 children 再 kill。
+
+教训：多进程程序的「停止」和「启动」一样需要写清楚。启动时 `--workers 4` 一行搞定，
+停止时却要处理进程树，这个不对称很容易被忽略，而它造成的现象（端口占用、内存泄漏、
+被误判成 OOM）都很难往这上面想。

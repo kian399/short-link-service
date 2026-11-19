@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.0] - 2026-11-19
+
+功能冻结。往后不再加接口，剩下的只有买服务器和准备面试。
+
+### Added
+- `bench/diagnose_proxy.py`：压测前体检，查 TUN / WinHTTP / 环境变量三层代理，并用两种连接池对照 loopback 延迟
+- `bench/sample_system.py`：压测时旁路采样主机 CPU、应用进程 CPU、PG 活跃连接数
+- `bench/make_demo_gif.py`：把真实运行记录渲染成 GIF，省掉录屏
+- 1/2/4 worker 对照实验，写进 `docs/benchmark.md`
+- README 增加「局限（Honest Limitations）」，把没做的事写清楚
+
+### Changed
+- 压测脚本发现环境不干净时直接退出，不再让人拿假数据写报告
+
 ## [0.5.0] - 2026-11-19
 
 交付收尾，主要是文档和部署细节，业务代码没动。

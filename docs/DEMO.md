@@ -2,6 +2,9 @@
 
 我自己用的流程：面试前十分钟照着跑一遍，确认每段都能出来东西。每段都写了「敲什么 → 应该看到什么 → 怎么说」。
 
+跑完的真实输出存在 [demo-transcript.txt](demo-transcript.txt)，`bench/demo_transcript.ps1` 一键生成；
+仓库根目录的 `docs/demo.gif` 就是拿这份记录渲染的（不是录屏，是终端样式的回放）。
+
 ## 0. 起服务
 
 ```powershell

@@ -304,11 +304,21 @@ def run_group(
         except Exception as exc:  # noqa: BLE001
             log(f"指标抓取失败（不影响压测结果）: {exc}")
     finally:
-        app.terminate()
-        try:
-            app.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            app.kill()
+        # Windows 上只 terminate 父进程，uvicorn 多 worker 时子进程会活下来：
+        # 端口一直被占（下次开跑报 10048），内存也一点点漏——11-19 那次跑完
+        # 4 worker，机器上留了 10 个 100MB 的孤儿进程，直接把 Docker 里的 app 挤到 OOM。
+        # taskkill /T 连子进程一起收掉，Linux 上用进程组。
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(app.pid), "/T", "/F"],
+                capture_output=True,
+            )
+        else:
+            app.terminate()
+            try:
+                app.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                app.kill()
         app_log.close()
 
     log(f"组 {group} 结束，冷却 {cooldown} 秒让 PG 连接池回收")

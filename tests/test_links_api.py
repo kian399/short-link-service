@@ -110,6 +110,25 @@ def test_list_links_paginated(client, auth_headers):
     assert not {item["code"] for item in body["items"]} & {item["code"] for item in items2}
 
 
+def test_create_after_miss_clears_negative_cache(client, auth_headers, fake_redis):
+    """先 404 落一个空值缓存，再创建同名别名，必须立刻能跳。
+
+    这个坑是面试准备时才发现的：创建时没有清 miss 键，用户先点了一个不存在的短码，
+    再把它创建出来，60 秒内访问还是 404。
+    """
+    assert client.get("/fresh9999", follow_redirects=False).status_code == 404
+    assert fake_redis.get("link:fresh9999") == "__MISS__"
+
+    resp = client.post(
+        "/api/v1/links",
+        json={"original_url": "https://example.com/fresh", "custom_alias": "fresh9999"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+
+    assert client.get("/fresh9999", follow_redirects=False).status_code == 302
+
+
 def test_list_excludes_soft_deleted(client, auth_headers):
     keep = _create(client, auth_headers).json()["code"]
     gone = _create(client, auth_headers).json()["code"]

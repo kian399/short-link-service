@@ -63,6 +63,9 @@ def _client_ip(request: Request) -> str:
     那一跳是离我们最近的反代追加的，客户端伪造不了（nginx 用
     $proxy_add_x_forwarded_for，把 $remote_addr 追加在末尾）。
     """
+    # 这个坑是部署后才发现的：本机直连时 client.host 是 127.0.0.1，
+    # 一切正常；套上 nginx 之后全变成 172.18.0.x，600/分钟 被整站共享，
+    # 压测跑到第 601 个请求就开始 429，还以为是限流代码写错了。
     if settings.TRUST_PROXY_HEADERS:
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:

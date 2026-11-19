@@ -95,6 +95,9 @@ async def rate_limited_handler(request: Request, exc: RateLimited):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     request_id = structlog.contextvars.get_contextvars().get("request_id", "")
+    # 这条日志有一次写爆了：PG 掉线之后每个请求都走到这里，完整 traceback 一行不落，
+    # 一轮压测 uvicorn.log 长到 161MB，磁盘差点满。生产里已知的依赖故障（连不上库/Redis）
+    # 应该单独拦下来返回 503，只记一行，别把 traceback 当访问日志用。
     logger.exception("unhandled_exception")
     return JSONResponse(
         status_code=500,

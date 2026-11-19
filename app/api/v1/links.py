@@ -32,6 +32,9 @@ def _insert(db: Session, code: str, link_data: LinkCreate) -> Link:
     db.add(link)
     db.commit()
     db.refresh(link)
+    # 先访问过 /abc（不存在），空值缓存会记住 60 秒；这时再创建别名 abc，
+    # 跳转还是 404，得等 miss 过期。创建完顺手删一次，成本就一个 Redis DEL。
+    delete_cached_link(code)
     return link
 
 

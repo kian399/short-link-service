@@ -107,6 +107,19 @@ def test_flush_failure_keeps_counter(client, auth_headers, fake_redis, db_sessio
     assert fake_redis.get(f"stats:{code}:{_today()}") == "1"
 
 
+def test_flush_skipped_when_another_worker_holds_lock(client, auth_headers, fake_redis, db_session):
+    """多 worker 各跑一个 flush 协程，不加锁会把同一批点击记两次。"""
+    code = _create(client, auth_headers)
+    stats.record_click(code)
+    fake_redis.set(stats.FLUSH_LOCK_KEY, "1", ex=55)
+
+    assert stats.flush_once(db_session) == 0
+    link_id = db_session.query(Link).filter_by(code=code).one().id
+    assert db_session.query(LinkStatsDaily).filter_by(link_id=link_id).count() == 0
+    # 锁没抢到，计数得原样留着等下一轮
+    assert fake_redis.get(f"stats:{code}:{_today()}") == "1"
+
+
 def test_cache_hit_still_counts(client, auth_headers, fake_redis):
     """这是修复的核心 bug：原来命中缓存不走回源，点击永远记不上。"""
     code = _create(client, auth_headers)

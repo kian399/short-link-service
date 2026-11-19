@@ -34,6 +34,9 @@ class SingleFlight:
                 call = _Call()
                 self._calls[key] = call
             else:
+                # 80/20 热点流量下这个 shared 计数就没动过（压测里是 0），
+                # 因为每个冷码的未命中窗口才几毫秒，200 个并发撞不到同一个码。
+                # 别把它当性能优化讲，它只在缓存刚失效的那一瞬间有用。
                 self.shared += 1
 
         if not leader:

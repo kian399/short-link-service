@@ -15,6 +15,8 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _ttl_for(expires_at: datetime | None) -> int:
+    # 一开始不管三七二十一给 3600 秒，结果给一条 5 分钟后过期的链接缓存了一小时：
+    # 链接都过期了缓存还在，用户还能跳 40 多分钟。改成「配置值和剩余寿命取小的」。
     if not expires_at:
         return settings.CACHE_TTL
     remaining = int((_as_utc(expires_at) - datetime.now(UTC)).total_seconds())

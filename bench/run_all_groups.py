@@ -20,6 +20,7 @@ CREATE_NEW_PROCESS_GROUP + terminate 才是可靠的。
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import subprocess
 import sys
@@ -112,6 +113,71 @@ def child_env(**overrides: str) -> dict[str, str]:
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """不跟 3xx：跳转要看到的就是 302 本身，跟过去会打到外网 target。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None
+
+
+_REDIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+
+
+def first_seeded_code() -> str:
+    path = ROOT / "bench" / "codes.txt"
+    if not path.exists():
+        raise SystemExit("没有 bench/codes.txt，先跑: uv run python bench/seed.py 100000 5000")
+    with path.open(encoding="utf-8") as fh:
+        code = fh.readline().strip()
+    if not code:
+        raise SystemExit("bench/codes.txt 是空的，重新 seed 一次")
+    return code
+
+
+def preflight() -> None:
+    """/healthz 只证明进程活着，不证明它连得上 PG 和 Redis。
+
+    2026-11-17 那次复跑就是这么翻车的：healthz 一直是 200，PG 容器其实没起来，
+    A/B/C 三组各一千多个请求全失败（延迟 20~25 秒），日志里刷了几万条
+    "connection to server at localhost (::1), port 5432 failed: Connection refused"。
+    白白跑了半小时，数据还盖掉了上一轮好的。
+    所以这里真打一次跳转，拿不到 302 就别开跑。
+    """
+    code = first_seeded_code()
+    try:
+        with _REDIRECT_OPENER.open(f"{HOST}/{code}", timeout=10) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise SystemExit(f"!! 服务连不上：{exc}") from exc
+
+    if status != 302:
+        raise SystemExit(
+            f"!! 预检失败：GET /{code} 返回 {status}，说明 PG 或 Redis 没起来。\n"
+            "   先 docker compose ps 看一眼，再 docker compose up -d postgres redis。"
+        )
+    log(f"预检通过：/{code} -> 302")
+
+
+def group_result_ok(group: str, tag: str) -> tuple[bool, str]:
+    """locust 跑完不代表数据能用，最后还是要看失败数和延迟。"""
+    path = OUT / f"{group}{tag}_stats.csv"
+    if not path.exists():
+        return False, "没有生成 stats.csv"
+    with path.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row.get("Name") == "Aggregated":
+                failures = int(float(row.get("Failure Count") or 0))
+                median = float(row.get("50%") or 0)
+                if failures:
+                    return False, f"{failures} 个请求失败（看一下 {group}{tag}_failures.csv）"
+                if median > 5000:
+                    return False, f"中位延迟 {median:.0f}ms，明显不是在正常服务"
+                return True, ""
+    return False, "stats.csv 里没有 Aggregated 行"
+
+
 def http_ok(url: str, timeout: float = 2.0) -> bool:
     try:
         with _OPENER.open(url, timeout=timeout) as resp:
@@ -189,6 +255,7 @@ def run_group(
         if not ready:
             raise SystemExit(f"!! 组 {group} 服务起不来，看 bench/out/{group}_uvicorn.log")
         log(f"服务就绪 pid={app.pid}")
+        preflight()
 
         # ③ 预热热点码；A 组也打一遍，保证五组起点一致
         if run([PY, "bench/prewarm.py", HOST]) != 0:
@@ -220,6 +287,13 @@ def run_group(
             # 不当致命错误：locust 偶尔在收尾瞬间给在途请求记 status=0，
             # 那种「错误」不是服务端挂了，直接丢弃整组数据反而要重跑 5 分钟。
             log(f"!! 组 {group} locust 返回 {rc}，请看 bench/out/{group}_stats.csv 判断")
+
+        ok, why = group_result_ok(group, tag)
+        if not ok:
+            raise SystemExit(
+                f"!! 组 {group} 的数据不能用：{why}\n"
+                "   这组作废，别往报告里写；先把 PG/Redis 弄好再重跑。"
+            )
 
         # ⑤ 抓指标快照（命中率/连接池），必须在停服务之前
         try:

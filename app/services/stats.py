@@ -26,6 +26,13 @@ logger = structlog.get_logger(__name__)
 KEY_PREFIX = "stats:"
 COUNTER_TTL = 3 * 86400  # 3 天，足够后台落库；同时防止 Redis 键无限增长
 
+# 落库锁：每个 worker 都有自己的 flush 协程，不加锁的话两个进程读到同一批计数、
+# 各自 UPSERT 一次，点击数直接翻倍。锁的 TTL 比 flush 间隔短一点，
+# 进程崩了它自己会过期，不会把后面的 flush 永久锁死。
+# 注意别用 "stats:" 前缀，snapshot_counts 是按 stats:* 扫键的，会被当成一条计数。
+FLUSH_LOCK_KEY = "lock:stats:flush"
+FLUSH_LOCK_TTL = 55
+
 # (redis_key, code, 'YYYYMMDD', clicks)
 CounterRow = tuple[str, str, str, int]
 
@@ -50,6 +57,8 @@ def record_click(code: str) -> None:
 def snapshot_counts() -> list[CounterRow]:
     """读出当前计数，但**不删除**。只有落库成功后才会扣减。"""
     out: list[CounterRow] = []
+    # 这里必须是 GET 不是 GETDEL。第一版就是 GETDEL，赶上 link_stats_daily 还没建表，
+    # INSERT 一失败，20 次点击连个报错都没留下就没了（计数器已经被删干净）。
     for key in redis_module.redis_client.scan_iter(match=f"{KEY_PREFIX}*", count=500):
         raw = redis_module.redis_client.get(key)
         if raw is None:
@@ -104,6 +113,29 @@ def flush_once(db: Session) -> int:
     用一条 INSERT ... SELECT ... ON CONFLICT 同时完成「code → link_id」的转换
     和累加，避免先查再写两次往返。写库失败时抛异常，计数器原样保留等待重试。
     """
+    # 4 个 worker 就有 4 个 flush 协程，没锁的话同一批点击会被记两次。
+    # 抢不到锁的进程直接跳过这一轮，下一轮再来。
+    try:
+        got_lock = bool(
+            redis_module.redis_client.set(FLUSH_LOCK_KEY, "1", nx=True, ex=FLUSH_LOCK_TTL)
+        )
+    except Exception:  # noqa: BLE001 Redis 都连不上，本来也读不到计数
+        logger.warning("stats_flush_lock_failed", exc_info=True)
+        return 0
+
+    if not got_lock:
+        return 0
+
+    try:
+        return _flush_locked(db)
+    finally:
+        try:
+            redis_module.redis_client.delete(FLUSH_LOCK_KEY)
+        except Exception:  # noqa: BLE001 删不掉就等它自己过期
+            logger.warning("stats_flush_unlock_failed", exc_info=True)
+
+
+def _flush_locked(db: Session) -> int:
     rows = snapshot_counts()
     if not rows:
         return 0

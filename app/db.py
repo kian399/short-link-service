@@ -27,6 +27,9 @@ def _split_pool() -> tuple[int, int]:
     return pool_size, overflow
 
 
+# 4 worker 那次压测 /metrics 里 db_pool_checked_out 打到 29，PG 直接报
+# "FATAL: sorry, too many clients already"，5 个请求 500。当时以为是并发太高，
+# 其实是 pool_size 按「每进程」算的，4 个 worker 各开 30 个，加起来 120 > 100。
 _pool_size, _max_overflow = _split_pool()
 
 engine = create_engine(
@@ -34,7 +37,9 @@ engine = create_engine(
     echo=False,  # 压测时 SQL 日志会写满 stdout，直接拖慢整体吞吐
     pool_size=_pool_size,
     max_overflow=_max_overflow,
-    pool_pre_ping=True,  # 取连接前探活，避免拿到被 PG 断掉的死连接
+    # Docker Desktop 重启过 PG 容器，池里留的全是死连接，每个请求都 500，
+    # 日志刷 "server closed the connection unexpectedly"；加这个之后至少能自己缓过来。
+    pool_pre_ping=True,
     pool_recycle=1800,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

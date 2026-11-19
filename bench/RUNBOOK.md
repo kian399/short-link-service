@@ -1,12 +1,14 @@
-# 压测执行手册（B/C/D/E 四组）
+# 压测执行手册
 
-> 用法：从 B 组开始，一组一组照做。每组约 8 分钟（准备 3 分钟 + 压测 3 分钟 + 冷却 2 分钟）。  
-> 四组做完约 35 分钟，然后填 `docs/benchmark.md`。
+两种跑法：想省事就用 `run_all_groups.py` 一把梭（A–F 六组自动切换开关、清缓存、抓指标）；
+想一组一组盯着看，就照下面的执行卡手动来。手动跑一组大约八分钟（准备三分钟 + 压测三分钟 + 冷却两分钟）。
 
-> ⚠️ **M3 之后新增前提：压测必须关掉限流。** 跳转限流是「按 IP 600/分钟」，
-> 而压测全部从 `127.0.0.1` 打，不关的话第 601 个请求开始全是 429，QPS 曲线假性暴跌。
-> 每组的开关里都带着 `RATE_LIMIT_ENABLED='false'`；`run_all_groups.py` 已经内置。
-> 想单独量化限流本身的代价，用 F 组（把阈值拉到 1 亿，不触发 429）。
+手动跑完记得把结果填进 `docs/benchmark.md`。
+
+> 一个前提：压测必须关掉限流。跳转限流是按 IP 600 次/分钟，压测全从 `127.0.0.1` 打，
+> 不关的话第 601 个请求开始全是 429，QPS 曲线会假性暴跌。
+> 每组的开关里都带 `RATE_LIMIT_ENABLED='false'`，`run_all_groups.py` 也内置了。
+> 想单独量限流本身的代价，用 F 组（限流打开、阈值拉到一亿，不会触发 429）。
 
 ---
 
@@ -197,8 +199,7 @@ uv run python bench/prewarm.py http://127.0.0.1:8000
 uv run locust -f bench/loadtest.py --headless -u 200 -r 20 -t 3m --host http://127.0.0.1:8000 --csv bench/out/mine_F1
 ```
 
-**预期**：QPS 比 C 组低 3–8%，P99 高 5–15ms。差值只是量级参考，别当精确值——
-它和组间噪声是同一个量级。
+**预期**：QPS 比 C 组低 3–8%，P99 高 5–15ms。这个差值只能当量级参考，别当精确值，它和组间噪声是一个量级。
 
 ---
 
@@ -234,7 +235,7 @@ netstat -ano | findstr :8000
 
 ## 5. 报告怎么写（填进 docs/benchmark.md）
 
-骨架已经写好了，你只需要替换这些部分：
+`docs/benchmark.md` 的结构已经搭好了，跑完照着填这几块：
 
 **① 环境**：机器配置（CPU 型号、核数、内存）
 
@@ -266,6 +267,7 @@ Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory
 | QPS 越跑越低                        | 上一组缓存没清           | `redis-cli flushdb`                       |
 | 所有组 QPS 差不多                     | 开关没生效（环境变量在启动时读取） | 改完必须重启 uvicorn                            |
 | Min 特别小但平均很大                    | 正常，说明在排队          | 看连接池 / 并发数                                |
+| 失败 100%、延迟 20 秒以上               | PG/Redis 没起来       | `docker compose ps`，看 app 日志里的 Connection refused |
 
 ---
 

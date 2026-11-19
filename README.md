@@ -1,39 +1,39 @@
 # short-link-service
 
-> 一个能扛压测、能被缓存救活的 URL 短链服务。
->   
-> **FastAPI · PostgreSQL · Redis · SQLAlchemy 2 · Alembic · Docker · pytest**
+短链接服务。给一个长网址，换回一个 7 位短码，访问短码 302 跳到原地址。
+
+主要解决两件事：跳转要快（读多写极少，缓存能吃掉绝大部分请求），点击要能统计（但又不能为了统计把跳转拖慢）。
+
+技术栈：FastAPI、SQLAlchemy 2、Alembic、PostgreSQL 16、Redis 7、pytest、Docker Compose、GitHub Actions。
 
 ![ci](https://github.com/kian399/short-link-service/actions/workflows/ci.yml/badge.svg)
 
 ## 功能
 
-| 能力    | 说明                                       |
-| ----- | ---------------------------------------- |
-| 创建短链  | 随机 7 位 Base62 短码，62^7 ≈ 3.5 万亿组合         |
-| 自定义别名 | 4–16 位字母/数字/下划线/短横线，含保留字黑名单              |
-| 跳转    | 302 重定向，读路径走 Redis 缓存                    |
-| 过期    | 创建时指定 `expires_at`，过期返回 410              |
-| 鉴权    | `X-API-Key` 请求头，缺失或错误返回 401              |
-| 列表与编辑 | 分页列表、`PATCH` 改目标地址/过期时间，改完自动失效缓存 |
-| 软删除   | 置 `is_active=false`，跳转 404，统计数据保留 |
-| 访问统计  | 按天聚合点击数，合并 Redis 未落库的今日计数 |
-| 限流    | 跳转按 IP 600/分钟、创建按 API Key 60/分钟，429 + `Retry-After` |
-| 删除    | 级联删除该短链的点击记录，并清理缓存                       |
-| 可观测   | structlog JSON 日志 + `X-Request-ID` 全链路透传 |
-| 健康检查  | `GET /healthz`                           |
+| 能力 | 说明 |
+| --- | --- |
+| 创建短链 | 随机 7 位 Base62；也可以指定 4–16 位自定义别名，有保留字黑名单 |
+| 跳转 | 302 重定向，读路径先查进程内缓存，再查 Redis，最后才回数据库 |
+| 过期 | 创建时可指定 `expires_at`，过期后返回 410 |
+| 访问统计 | 按天聚合点击，落库有延迟时接口会合并 Redis 里还没落库的计数 |
+| 限流 | 跳转按客户端 IP 600 次/分钟，写接口按 API Key 60 次/分钟，超限 429 |
+| 管理 | 分页列表、`PATCH` 改目标地址或过期时间、软删除（跳转 404，统计保留） |
+| 可观测 | JSON 结构化日志、`X-Request-ID` 透传、`/metrics` 暴露计数器 |
+| 健康检查 | `GET /healthz`，Dockerfile 里也拿它做 HEALTHCHECK |
 
-## 快速开始
+鉴权只有一个 `X-API-Key` 请求头，没有用户体系（这个刻意的，见文末）。
+
+## 跑起来
 
 ```bash
 git clone https://github.com/kian399/short-link-service.git
 cd short-link-service
-cp .env.example .env          # 按需修改 API_KEY
-docker compose up -d --build  # postgres + redis + app，迁移自动执行
+cp .env.example .env            # 至少把 API_KEY 改掉
+docker compose up -d --build    # postgres + redis + app，迁移随容器启动自动跑
 curl http://127.0.0.1:8000/healthz
 ```
 
-创建一条短链：
+创建一条：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/links \
@@ -42,102 +42,94 @@ curl -X POST http://127.0.0.1:8000/api/v1/links \
   -d '{"original_url":"https://example.com/a/long/path"}'
 ```
 
-## API
+## 接口
 
-| 方法     | 路径                             | 说明            | 状态码                             |
-| ------ | ------------------------------ | ------------- | ------------------------------- |
-| POST   | `/api/v1/links`                | 创建短链          | 201 / 401 / 409 / 422 / 429     |
-| GET    | `/api/v1/links`                | 分页列出未删除的短链    | 200 / 401                       |
-| GET    | `/api/v1/links/{code}`         | 查询元信息         | 200 / 401 / 404                 |
-| PATCH  | `/api/v1/links/{code}`         | 改目标地址 / 过期时间  | 200 / 401 / 404 / 422 / 429     |
-| DELETE | `/api/v1/links/{code}`         | 软删除，跳转变 404  | 204 / 401 / 404                 |
-| GET    | `/api/v1/links/{code}/stats`   | 按天点击统计        | 200 / 401 / 404 / 422           |
-| GET    | `/{code}`                      | 跳转            | 302 / 404 / 410 / 429           |
-| GET    | `/healthz`                     | 健康检查          | 200                             |
+| 方法 | 路径 | 用途 | 常见状态码 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/links` | 创建 | 201 / 401 / 409 / 422 / 429 |
+| GET | `/api/v1/links` | 分页列表（不含已删除） | 200 / 401 |
+| GET | `/api/v1/links/{code}` | 元信息 | 200 / 401 / 404 |
+| PATCH | `/api/v1/links/{code}` | 改目标地址 / 过期时间 | 200 / 401 / 404 / 422 / 429 |
+| DELETE | `/api/v1/links/{code}` | 软删除 | 204 / 401 / 404 |
+| GET | `/api/v1/links/{code}/stats?days=7` | 按天点击统计 | 200 / 401 / 404 / 422 |
+| GET | `/{code}` | 跳转 | 302 / 404 / 410 / 429 |
+| GET | `/healthz` | 探活 | 200 |
 
-请求示例：
+`/metrics` 是 Prometheus 文本格式，只对容器网段开放（见 `nginx/nginx.conf`）。
 
-```json
-{ "original_url": "https://example.com/long/path",
-  "custom_alias": "my-blog",
-  "expires_at": "2026-12-31T00:00:00" }
-```
+## 几个设计上的选择
 
-响应示例：
+### 短码
 
-```json
-{ "code": "my-blog",
-  "original_url": "https://example.com/long/path",
-  "created_at": "2026-10-24T07:47:56",
-  "expires_at": null,
-  "short_url": "http://127.0.0.1:8000/my-blog" }
-```
+随机 7 位 Base62，62^7 大概 3.5 万亿种，实际量级下撞不上。真要撞了数据库唯一索引会拒掉，接口重试 3 次。
 
-## 架构
+没做发号器：多一个组件就多一份运维，随机码还顺带不可枚举。代价是不可控的字母分布，但这个场景无所谓。
 
-```
-             ┌────────────────┐
-  GET /code  │    FastAPI     │
- ──────────► │ 限流 → L1(进程) │
-             └───────┬────────┘
-                     │ L1 未命中（singleflight：同码并发只放一个回源）
-             ┌───────▼────────┐  命中 ──► 302
-             │     Redis      │
-             └───────┬────────┘
-                     │ 未命中
-             ┌───────▼────────┐
-             │   PostgreSQL   │ ──► 回填 L2/L1 ──► 302
-             └────────────────┘
+### 缓存
 
-  302 之前：Redis INCR 记点击（不阻塞跳转）
-  后台每 60s：读计数 → UPSERT link_stats_daily → 扣减
-```
+三层：进程内 `TTLCache` 30 秒、Redis 1 小时、最后数据库。
 
-## 目录结构
+缓存里存的不是纯 URL，是 `{"u": url, "e": expires_at}`。这样命中缓存就能判断过期，不用再回库查一次。Redis 的 TTL 取「配置值」和「距离过期还剩多久」里小的那个，不然给一条 5 分钟后过期的链接缓存一小时，链接过期了缓存还在。
 
-```
-short-link-service/
-├── app/
-│   ├── main.py              # FastAPI 实例、异常处理、埋点落库后台任务
-│   ├── config.py            # pydantic-settings 配置（缓存/限流/埋点开关）
-│   ├── db.py                # engine / session 依赖（连接池按 worker 均分）
-│   ├── redis_client.py      # Redis 连接
-│   ├── metrics.py           # 手写 Prometheus 文本指标，/metrics 暴露
-│   ├── middleware/          # Request-ID / 指标 / 限流
-│   ├── models/              # ORM 模型
-│   ├── schemas/             # 请求/响应模型
-│   ├── services/            # 短码、缓存(L1/L2)、singleflight、统计
-│   └── api/v1/              # 创建/列表/查询/编辑/删除/统计、跳转
-├── alembic/                 # 数据库迁移
-├── bench/                   # seed / locust / 五组压测编排 / RUNBOOK
-├── docs/                    # benchmark 报告、troubleshooting
-├── nginx/                   # 生产反代配置
-├── tests/                   # 单元 + 接口 + 缓存 + 限流测试
-├── Dockerfile
-├── docker-compose.yml       # 本地：app + pg + redis
-├── docker-compose.prod.yml  # 生产：只有 nginx 暴露 80
-└── .github/workflows/ci.yml
-```
+写操作（创建、PATCH、删除）都是先落库再删缓存，没有做双写。跳转是读多写极少的场景，302 容忍几秒不一致，先删缓存再写库反而容易被旧值回填。
 
-## 本地开发
+不存在的短码会被反复查，所以用一个 60 秒的 `__MISS__` 顶住，防止打穿到数据库。
 
-```bash
-uv sync                                   # 安装依赖（含 dev）
-docker compose up -d postgres redis       # 只起依赖
-uv run alembic upgrade head               # 建表
-uv run uvicorn app.main:app --reload      # 启动
-```
+### 防击穿
 
-## 部署
+缓存刚好失效的瞬间，同一个热点码的并发请求会一起回源。`singleflight` 让一个请求去查，其余等结果。
 
-```bash
-cp .env.prod.example .env        # 改 API_KEY、POSTGRES_PASSWORD、BASE_URL 为域名
-docker compose -f docker-compose.prod.yml up -d --build
-curl http://<服务器 IP>/healthz  # 返回 {"status":"ok"} 即成功
-```
+要说实话：80/20 的常规流量下它一次都没生效过（D 组 `shared` 计数是 0），因为每个冷码的未命中窗口只有几毫秒，200 个并发撞不到同一个码。它真正有用的场景我单独造了（钉死一个码、L1 TTL 调 1 秒、关掉 Redis），回源次数从 604 降到 60。所以它是防击穿组件，不是提吞吐组件。
 
-只有 nginx 暴露 80，app / postgres / redis 都在 compose 内网；app 启动时自动 `alembic upgrade head`。
-反代细节在 [nginx/nginx.conf](nginx/nginx.conf)（upstream keepalive、302 不缓冲、`/healthz` 不写日志）。
+### 点击统计
+
+跳转路径上只做一次 Redis `INCR`，后台协程每 60 秒把计数批量 UPSERT 进 `link_stats_daily`。
+
+不直接在跳转里 `INSERT` 有两个原因：写放大严重，QPS 上不去；而且缓存命中的请求压根不走回源逻辑，早期版本 20 次点击只记了 1 条。
+
+落库用「读快照 → 写库 → `DECRBY` 扣减」三步，不是 `GETDEL`。第一版就是 `GETDEL`，赶上表还没建，`INSERT` 失败，20 次点击直接蒸发，日志里什么都没有。
+
+4 个 worker 就有 4 个落库协程，所以落库前先抢一把 Redis 锁（`SET NX EX`，55 秒），抢不到就跳过这轮。不然两个进程读到同一批计数，各写一次，点击数直接翻倍。
+
+统计接口会把「已落库的日聚合」和「Redis 里还没落库的今天」加在一起返回，`pending_today` 单独给出来，不然用户点完立刻查会以为没记上。
+
+### 限流
+
+Redis 固定窗口，`INCR` 和 `EXPIRE` 用 Lua 包在一起。分两条命令发的话，中间进程崩了会留下一个永不过期的计数键，那个 IP 就永久被限流了。
+
+跳转按 IP、写接口按 Key。固定窗口的毛病我知道：窗口切换那一瞬间可能放过接近两倍的突发。短链这个场景能接受，要更平滑就得上滑动窗口或令牌桶。
+
+部署到 nginx 后面之后才发现 `request.client.host` 拿到的是 nginx 的容器 IP，600 次/分钟变成整站共享，压测跑到第 601 个请求就开始 429。现在按 `TRUST_PROXY_HEADERS` 开关读 `X-Real-IP`，退而求其次读 `X-Forwarded-For` 的最右一跳。
+
+### 部署
+
+`docker-compose.prod.yml` 里只有 nginx 对外，app / postgres / redis 都在内网，迁移在 app 启动时执行。反代配置在 `nginx/nginx.conf`，包括 upstream keepalive、302 不缓冲、`/healthz` 不记日志。
+
+有个坑写在 `docs/troubleshooting.md` 第 9 条：nginx 启动时会把 upstream 的主机名解析成 IP 并一直用，app 容器重建后 IP 变了，nginx 还在打旧地址，表现就是 502。所以**发完版要重启 nginx**。
+
+## 压测
+
+环境：Ryzen 7 7745HX（8C16T）/ 16GB / Windows 11，PG 和 Redis 跑在 Docker 里，应用单进程 `uvicorn --workers 1`。
+数据 10 万条短链，80% 请求打 5% 的热点码。locust 200 并发，3 分钟。
+
+| 组 | 配置 | QPS | P50 | P95 | P99 | 错误 |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 纯数据库 | 631 | 310ms | 370ms | 400ms | 0% |
+| B | + Redis | 773 | 250ms | 300ms | 320ms | 0% |
+| C | + 进程内 L1 | 804 | 240ms | 290ms | 310ms | 0% |
+| D | + singleflight | 678 | 280ms | 350ms | 370ms | 0% |
+| E | + 埋点 | 635 | 300ms | 380ms | 410ms | 0% |
+| C×4 | C 的配置 + 4 worker | 1538 | 67ms | 110ms | 130ms | 0% |
+
+这组数是 11 月 12 号测的，代码版本 `27a1cee`。11 月 17 号想复跑一次（带限流），结果 PG 容器没起来，A/B/C 三组一千多个请求全失败、延迟 20 多秒，整批数据作废，还把 C 组原来的 csv 覆盖了。所以表里还是那批老数据，复跑待补。
+
+三个我现在还认的结论：
+
+1. 这批改动里 Redis 是唯一的大头。QPS 631 → 773，回源 PG 从 593 次/秒掉到 150 次/秒（这个数字来自进程内计数器，比 QPS 可靠）。
+2. 第二道瓶颈是单进程。同一份配置开 4 个 worker，QPS 直接到 1538。再往上加不动，是压测机自己先撑不住（locust 和应用抢同一台机器的 CPU）。
+3. D 和 E 比 C 低的那点，我不敢单独归因。同配置重复跑自己就能差 12%，把噪声当结论是压测最容易犯的错。
+
+方法、逐组归因、以及这份数据的可信度边界在 [docs/benchmark.md](docs/benchmark.md)，踩过的坑在 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
 ## 测试
 
@@ -145,99 +137,44 @@ curl http://<服务器 IP>/healthz  # 返回 {"status":"ok"} 即成功
 uv run pytest --cov=app --cov-report=term-missing
 ```
 
-当前：**67 个用例，覆盖率 90%**。测试用事务回滚隔离数据，Redis 用 fakeredis（限流的 Lua 由 lupa 执行）。
+当前 72 个用例，覆盖率 90%。数据库用事务回滚隔离，Redis 用 fakeredis（限流的 Lua 脚本靠 lupa 跑）。
 
-## 压测
+CI 里是真实的 PostgreSQL 16 和 Redis 7 服务容器，跑 ruff、black、alembic、pytest。
 
-环境：AMD Ryzen 7 7745HX（8C16T）/ 16GB / Windows 11，PostgreSQL 与 Redis 跑在 Docker 里，
-  
-应用单进程 `uvicorn --workers 1`。数据集 10 万条短链，80% 请求打 5% 的热点码（模拟真实流量分布）。
+## 目录
 
-locust 200 并发、持续 3 分钟（下表是 M2 收尾时的基线；M3 的限流让跳转多了一次 Redis 调用，重测后更新）：
-
-| 组   | 配置               | QPS  | P50   | P95   | P99   | 错误率 |
-| --- | ---------------- | ---- | ----- | ----- | ----- | --- |
-| A   | 纯数据库，无缓存         | 631  | 310ms | 370ms | 400ms | 0%  |
-| B   | + Redis（L2）      | 773  | 250ms | 300ms | 320ms | 0%  |
-| C   | + 进程内 L1         | 804  | 240ms | 290ms | 310ms | 0%  |
-| D   | + singleflight   | 678  | 280ms | 350ms | 370ms | 0%  |
-| E   | + 埋点旁路           | 635  | 300ms | 380ms | 410ms | 0%  |
-| C×4 | C 组配置 + 4 worker | 1538 | 67ms  | 110ms | 130ms | 0%  |
-
-三条能站得住的结论：
-
-1. **Redis 是这批改动里唯一的大头**：QPS 631 → 773（+22%），P99 400ms → 320ms。
-2. **第二道瓶颈是单进程 CPU**：C 组 4 worker 后 QPS 直接翻到 1538，说明缓存不是万能的，
-     
-   加完缓存还得看进程模型。A 组曾经的瓶颈是连接池（默认 5 个连接，200 并发下打满）。
-3. **D/E 相对 C 的小幅下降不单独归因**：三组之间 5%–16% 的差异与同配置重复测试的波动幅度相当，
-     
-   把噪声当结论是压测最常见的错误。
-
-完整方法论、逐组归因、以及这份数据的可信度边界见 [docs/benchmark.md](docs/benchmark.md)。
-  
-踩过的坑记在 [docs/troubleshooting.md](docs/troubleshooting.md)。
-
-## 生产部署
-
-```bash
-cp .env.prod.example .env.prod
-# 改三处：API_KEY、POSTGRES_PASSWORD、BASE_URL（改成域名或公网 IP）
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+app/
+  main.py          应用入口、异常处理、埋点落库的后台任务
+  config.py        pydantic-settings 配置（缓存/限流/埋点都能用环境变量关掉）
+  db.py            engine 和 session，连接池按 worker 数均分
+  metrics.py       手写的 Prometheus 文本指标
+  middleware/      Request-ID、请求指标、限流
+  services/        短码生成、两层缓存、singleflight、统计
+  api/v1/          增删改查、统计、跳转
+alembic/           5 个版本的迁移
+bench/             seed、locust 脚本、六组压测编排、RUNBOOK
+docs/              压测报告、踩坑记录、演示脚本、面试问答
+nginx/             生产反代配置
+tests/             72 个用例
 ```
 
-只有 nginx 暴露 80，app / postgres / redis 全在内网。数据库迁移在 app 启动时自动执行。
+## 进度
 
-**更新应用后必须重启 nginx**：
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build app
-docker compose -f docker-compose.prod.yml --env-file .env.prod restart nginx
-```
-
-nginx 启动时会把 upstream 的容器名解析成 IP 并缓存，app 容器重建后 IP 变了会 502。
-详见 [docs/troubleshooting.md](docs/troubleshooting.md) 第 9 条。
-
-## 生产部署
-
-```bash
-cp .env.prod.example .env.prod
-# 改三处：API_KEY、POSTGRES_PASSWORD、BASE_URL（改成域名或公网 IP）
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-```
-
-只有 nginx 暴露 80，app / postgres / redis 全在内网。数据库迁移在 app 启动时自动执行。
-
-**更新应用后必须重启 nginx**：
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build app
-docker compose -f docker-compose.prod.yml --env-file .env.prod restart nginx
-```
-
-nginx 启动时会把 upstream 的容器名解析成 IP 并缓存，app 容器重建后 IP 变了会 502。
-详见 [docs/troubleshooting.md](docs/troubleshooting.md) 第 9 条。
-
-## 关键设计
-
-**短码为什么是随机 7 位**：62^7 ≈ 3.5 万亿，业务量级下碰撞概率可忽略；数据库唯一索引兜底，撞了就重试 3 次。相比“发号器 + Base62”，随机码不可枚举，也不需要额外发号服务。
-
-**缓存为什么用 Cache-Aside + 写后失效**：跳转是读多写极少的场景，302 容忍秒级不一致。创建/删除先落库，再删缓存，避免“先删缓存再写库”被旧值回填。
-
-**为什么要空值缓存**：不存在的短码会被反复查询打穿到数据库，用一个 60 秒的 `__MISS__` 占位挡住。
-
-**为什么删除是软删除**：把 `is_active` 置 false，跳转立刻 404，但 `link_stats_daily` 里的日聚合还留着——删链接不该顺手删掉历史数据。读路径统一带 `is_active` 过滤，写操作（PATCH / DELETE）主动删缓存，避免旧值被回填。
-
-## Roadmap
-
-- [x] M0 核心链路跑通（2026-10-24）
-- [x] M1 工程化：Docker / CI / 测试 / 结构化日志（2026-10-24）
-- [x] M2 性能：L1 缓存、singleflight、locust 压测报告（2026-11-13）
-- [x] M3 功能：统计接口、限流中间件、分页 / PATCH / 软删除（2026-11-15）
-- [ ] M4 交付：公网部署、M3 后回归压测、演示 GIF
+- [x] M0 核心链路（10-24）
+- [x] M1 工程化：Docker / CI / 测试 / 日志（10-24）
+- [x] M2 性能：L1、singleflight、压测（11-13）
+- [x] M3 功能：统计接口、限流、分页 / PATCH / 软删除（11-15）
+- [x] M4 交付：生产编排、演示脚本、压测数据核对（11-19）
+- [ ] 买台云服务器真的部一次（代码就绪，差钱和域名）
 
 ## 明确不做
 
-- 用户体系与多租户（只保留单一 API Key）
-- 前端页面（只提供 `/docs` 与跳转）
-- 短链点击实时大屏
+用户体系和多租户、前端页面、实时大屏、布隆过滤器（长尾回源还能再挡一层，但当前数据量用不上）。
+
+## 文档
+
+- [压测报告](docs/benchmark.md)
+- [踩坑记录](docs/troubleshooting.md)
+- [面试演示脚本](docs/DEMO.md)
+- [面试问答（含网络层）](docs/INTERVIEW.md)

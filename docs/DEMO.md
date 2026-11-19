@@ -159,7 +159,7 @@ curl.exe -s $B/api/v1/links/demo-2026/stats -H "X-API-Key: $K"
 | 测试 | 72 个用例，覆盖率 90% |
 | QPS 纯 DB | 631 |
 | QPS 加 Redis | 773（回源 PG 从 593/秒降到 150/秒） |
-| QPS 4 worker | 1538 |
+| QPS 4 worker | 1538（11-12 那批）；11-19 同条件对照是 1/2/4 worker = 596 / 1223 / 1257 |
 | P99 | 400ms → 320ms |
 | 冷启动 / 命中 | 7.0ms / 4.7ms（本机 loopback） |
 | 限流 | 600/分钟（IP）、60/分钟（Key） |
